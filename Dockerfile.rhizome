@@ -1,0 +1,66 @@
+FROM ubuntu:22.04
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system packages
+RUN apt update && apt install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    tini \
+    curl \
+    wget \
+    build-essential \
+    bash \
+    curl \
+    sudo \
+    procps \
+    ffmpeg \
+    && apt clean && rm -rf /var/lib/apt/lists/*
+
+# Use tini as init
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Set working directory
+WORKDIR /app
+
+# Optional: Copy any pre-downloaded wheel files for offline support
+# COPY wheels/ /tmp/wheels/
+
+# Install basic Python packages (split for resiliency)
+RUN pip3 install --no-cache-dir \
+    --timeout 180 \
+    numpy pandas scikit-learn matplotlib rich psutil tqdm pyyaml ftfy \
+    librosa scipy soundfile kokoro pdfminer.six PyMuPDF faiss-cpu wandb spacy \
+    gradio requests
+
+
+# Install SentenceTransformer separately with longer timeout
+RUN pip3 install sentence-transformers --timeout 180 --no-cache-dir
+
+# (Optional) Copy your Rhizome memory files
+# COPY rhizome_memory.index rhizome_memory_texts.npy /app/
+
+# Add NVIDIA package repositories
+RUN apt-get update && \
+    apt-get install -y --fix-missing nvidia-cuda-toolkit && \
+    apt install -y nvidia-utils-545 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Optional: Install PyTorch with CUDA support
+RUN pip3 install \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu118 && \
+    pip3 install \
+    transformers datasets peft sentence-transformers
+
+# Optional: Add user (if you want to avoid running as root)
+# RUN useradd -ms /bin/bash rhizome && echo "rhizome ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# USER rhizome
+# WORKDIR /home/rhizome
+
+# Default command
+CMD ["bash"]
+
