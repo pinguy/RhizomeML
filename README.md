@@ -410,8 +410,8 @@ Grad Norm: 2.23 → 1.87 → 1.45 → 1.22  ✅ Decreasing smoothly
 
 ```bash
 # Download Vosk speech model
-wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip
-unzip vosk-model-en-us-0.22.zip
+wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.42-gigaspeech.zip
+unzip vosk-model-en-us-0.42-gigaspeech.zip
 
 # Place UCS config
 # (UCS_v3_4_1.py should be in project root)
