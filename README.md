@@ -311,7 +311,7 @@ python3 train_script.py
 🎨 Theme-weighted sampling: ENABLED
 ```
 
-**Hardware-specific behavior:**
+**Hardware-specific behavior:** CPU Tested on Intel® Xeon(R) CPU E5-2680 v4 @ 2.40GHz × 28
 
 | Hardware | Batch Size | Grad Accum | FP16 | Expected Time* |
 |----------|-----------|------------|------|----------------|
