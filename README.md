@@ -567,12 +567,6 @@ Check:
 - **CPU:** Use all cores minus 1 (automatic)
 - **GPU:** Monitor with `nvidia-smi`, ensure >90% utilization
 - **RAM:** Keep <80% usage (swap kills performance)
-
-### Checkpoint Management
-```bash
-# Keep only best checkpoints to save space
-rm -rf DeepSeek-R1-Distill-Qwen-1.5B-finetuned_*/checkpoint-{1..50}
-# Keep checkpoint-100, 200, ... and final
 ```
 
 ---
