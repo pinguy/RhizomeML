@@ -107,7 +107,7 @@ python3 pdf_to_json.py ./PDFs/
 - Extracts text from PDFs with proper formatting
 - Chunks into semantically coherent segments
 - Preserves metadata (filename, page numbers, source type)
-- Outputs: `pdf_texts.json` or similar
+- Outputs: `pdf_texts.json`
 
 **Tips:**
 - Works best with text-based PDFs (not scanned images)
@@ -198,6 +198,8 @@ python3 data_formatter.py \
   --dedup-similarity-threshold 0.95 \
   --qa-quality-score-threshold 0.46
 ```
+
+* **Keyphrase extraction** improves semantic richness but increases runtime; enable only for smaller datasets.
 
 **What it does:**
 1. **Loads data:** Memory texts + metadata
