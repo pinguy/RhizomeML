@@ -355,7 +355,7 @@ DeepSeek-R1-Distill-Qwen-1.5B-finetuned_20251106_061947/
 ## 🎨 Understanding Theme-Weighted Sampling
 
 **The Problem:**
-In raw conversation data, common themes like "like", "time", "system" dominate (24%, 10%, 6% in your data). Rare topics like "ulysses" or "james_joyce" appear once. Standard training means the model sees common themes 28,000× more than rare ones.
+In raw conversation data, common themes like "like", "time", "system" dominate (24%, 10%, 6% in the data). Rare topics like "ulysses" or "james_joyce" appear once. Standard training means the model sees common themes 28,000× more than rare ones.
 
 **The Solution:**
 Theme-weighted sampling applies **inverse frequency weighting**:
