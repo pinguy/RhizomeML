@@ -4,7 +4,7 @@
 
 > A complete, offline-first pipeline for fine-tuning language models with semantic memory integration. Transforms raw conversations, PDFs, and documents into high-quality training data with IPF-calibrated theme weighting, FAISS-backed retrieval, and LoRA adaptation.
 
-**Built for the real world:** Runs on decade-old hardware. Scales to GPU clusters. No cloud required.
+**Built for the real world:** Runs from Xeons to GPU clusters. No cloud required.
 
 ---
 
