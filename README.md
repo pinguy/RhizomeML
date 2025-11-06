@@ -67,9 +67,11 @@ pip3 install pyipf
 
 ```
 RhizomeML/
+├── 📚 Input Data
 │   ├── PDFs/                          # Place raw PDFs here
 │   ├── conversations.json             # ChatGPT export
-│   └── conversations2.json            # Claude export (optional)
+│   ├── conversations2.json            # Claude export (optional)
+│   ├── pdf_texts.json                 # PDFs JSON (optional)
 │   ├── pdf_to_json.py                 # PDF → structured JSON
 │   ├── batch_embedder.py              # Embed & index memory
 │   ├── data_formatter.py            # Clean, dedupe, label, create datasets
@@ -84,7 +86,7 @@ RhizomeML/
 │   │   └── dataset_metadata.json      # Theme distribution stats
 │   └── DeepSeek-R1-Distill-Qwen-1.5B-finetuned_*/  # Model checkpoints
 │   ├── gradio_chat_tts.py             # STT → LLM → TTS interface
-│   └── UCS_v3_4_1.py                  # UCS config
+│   ├── UCS_v3_4_1.py                  # UCS config
     ├── README.md
     └── requirements.txt
 ```
