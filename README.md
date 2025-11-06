@@ -538,7 +538,6 @@ python3 data_formatter.py --enable-semantic-labeling  # (omit --extract-keyphras
 This means theme metadata is missing from your training data. Ensure:
 1. You ran `data_formatter.py` with `--enable-semantic-labeling`
 2. `dataset_metadata.json` exists with theme distribution
-3. Training data includes `source_metadata.themes`
 
 ### Training is VERY slow
 **CPU training is slow by design.** Expected speeds:
