@@ -428,6 +428,8 @@ python3 gradio_chat_tts.py
 
 **Note:** Alpha stage - expect rough edges!
 
+[![Web UI](https://raw.githubusercontent.com/pinguy/RhizomeML/refs/heads/main/image.png)](https://raw.githubusercontent.com/pinguy/RhizomeML/refs/heads/main/image.png)
+
 ### Option 2: Python API
 
 ```python
