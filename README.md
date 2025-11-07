@@ -631,7 +631,7 @@ MIT License - use it, break it, improve it. Just don't blame me if your CPU catc
 - [PEFT](https://huggingface.co/docs/peft) - LoRA implementation
 - [SentenceTransformers](https://www.sbert.net/) - Embeddings
 - [FAISS](https://github.com/facebookresearch/faiss) - Vector search
-- [PyIPF](https://github.com/danesherbs/pyipf) - Iterative Proportional Fitting
+- [PyIPF](https://github.com/py-pdf/pypdf) - Iterative Proportional Fitting
 - [KeyBERT](https://github.com/MaartenGr/KeyBERT) - Keyphrase extraction
 - [NLTK](https://www.nltk.org/) - NLP utilities
 
