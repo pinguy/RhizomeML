@@ -554,27 +554,6 @@ Check:
 
 ---
 
-## 🏆 Best Practices
-
-### Data Quality > Quantity
-- ✅ 10k high-quality, diverse pairs > 100k duplicates
-- ✅ Enable semantic labeling for better curation
-- ✅ Review `dataset_metadata.json` for theme coverage
-
-### Iterative Improvement
-1. Train with 1 epoch first (test the pipeline)
-2. Check theme diversity and loss curves
-3. Adjust `qa_quality_score_threshold` if needed
-4. Re-run with 2-3 epochs for final model
-
-### Hardware Utilization
-- **CPU:** Use all cores minus 1 (automatic)
-- **GPU:** Monitor with `nvidia-smi`, ensure >90% utilization
-- **RAM:** Keep <80% usage (swap kills performance)
-```
-
----
-
 ## 📚 Technical Deep Dive
 
 ### Why IPF (Iterative Proportional Fitting)?
@@ -621,20 +600,6 @@ LLM generates response
 
 Currently: Embeddings generated, FAISS arrays ready.  
 **TODO:** Integrate retrieval into inference pipeline.
-
----
-
-## 🛣️ Roadmap
-
-- [ ] **FAISS integration** for context-augmented generation
-- [ ] **Multi-GPU training** support (DDP)
-- [ ] **Quantization** (4-bit, 8-bit) for inference
-- [ ] **Streaming inference** with gradio interface improvements
-- [ ] **Evaluation suite** (perplexity, theme coverage, human eval)
-- [ ] **Docker image** for reproducible builds
-- [ ] **Web UI** for dataset curation and labeling
-
----
 
 ## 🤝 Contributing
 
