@@ -1,0 +1,5 @@
+python3 pdf_to_json.py
+python3 batch_embedder.py
+python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid
+python fix_jsonl.py data_finetune/dataset_train_detailed.jsonl
+python3 train_script.py
