@@ -1,4 +1,4 @@
-# Run with this for CPU only: python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid 
+# Run with this for CPU only: python3 data_formatter_patched.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid 
 # Enabling --extract-keyphrases runs very slow but improves semantic themes
 
 
@@ -121,6 +121,37 @@ except:
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# UTILITY: METADATA TYPE NORMALIZATION (PATCH)
+# ============================================================================
+
+def normalize_metadata_types(metadata: Dict) -> Dict:
+    """
+    Normalize metadata types to ensure schema consistency for PyArrow.
+    Converts all IDs and timestamps to strings to avoid type conflicts.
+    """
+    if not isinstance(metadata, dict):
+        return metadata
+    
+    normalized = {}
+    for key, value in metadata.items():
+        if value is None:
+            normalized[key] = None
+        elif key in ['conversation_id', 'message_id', 'user_id', 'timestamp']:
+            # Convert IDs and timestamps to strings for consistency
+            normalized[key] = str(value)
+        elif isinstance(value, dict):
+            # Recursively normalize nested dicts
+            normalized[key] = normalize_metadata_types(value)
+        elif isinstance(value, list):
+            # Normalize list items if they're dicts
+            normalized[key] = [normalize_metadata_types(item) if isinstance(item, dict) else item 
+                             for item in value]
+        else:
+            normalized[key] = value
+    
+    return normalized
 
 # ============================================================================
 # UNIFIED CONFIGURATION
@@ -1327,10 +1358,12 @@ class OptimizedDataProcessor:
                     
                     batch_user_texts.append(final_user_text)
                     batch_assistant_texts.append(text)
+                    
+                    # PATCH: Normalize metadata types for schema consistency
                     batch_metadata.append({
-                        'user_msg': current_user_msg['metadata'],
-                        'assistant_msg': msg['metadata'],
-                        'source_file': current_user_msg['metadata'].get('source_file', 'conversation'),
+                        'user_msg': normalize_metadata_types(current_user_msg['metadata']),
+                        'assistant_msg': normalize_metadata_types(msg['metadata']),
+                        'source_file': str(current_user_msg['metadata'].get('source_file', 'conversation')),
                         'themes': msg.get('semantic_labels', {}).get('themes', []),
                         'source': 'conversation'
                     })
@@ -1447,11 +1480,14 @@ class OptimizedDataProcessor:
                 for question in questions:
                     batch_questions.append(question)
                     batch_answers.append(chunk_text)
-                    batch_metadata.append({
-                        **metadata, 
-                        'source_file': source,
+                    
+                    # PATCH: Normalize metadata types for schema consistency
+                    normalized_meta = normalize_metadata_types(metadata)
+                    normalized_meta.update({
+                        'source_file': str(source),
                         'source': 'pdf'
                     })
+                    batch_metadata.append(normalized_meta)
             
             if batch_questions:
                 quality_metrics_batch = self._assess_pair_quality_batch(batch_questions, batch_answers)
@@ -1547,11 +1583,15 @@ class OptimizedDataProcessor:
                 source = pair.get('source_metadata', {}).get('source', 'unknown')
                 metadata_summary['source_distribution'][source] += 1
             
-            # Save formatted for training with "text" key
+            # PATCH: Save formatted for training with "text" AND "source_metadata"
             path = output_dir / f"{self.config.output_prefix}_{split_name}.jsonl"
             with open(path, "w", encoding="utf-8") as f:
                 for item in data:
-                    formatted = {"text": item['text']}
+                    # Include source_metadata with normalized types for theme-weighted sampling
+                    formatted = {
+                        "text": item['text'],
+                        "source_metadata": normalize_metadata_types(item.get('source_metadata', {}))
+                    }
                     f.write(json.dumps(formatted, ensure_ascii=False) + "\n")
             
             # Save detailed for analysis
@@ -1667,7 +1707,7 @@ def main(cfg: Config):
     # LOAD MEMORY DATA
     # ========================================================================
     
-    logger.info("\n📥 LOADING MEMORY DATA...")
+    logger.info("\n🔥 LOADING MEMORY DATA...")
     
     # Load memory texts and metadata
     memory_entries_raw = processor.load_memory_texts()
@@ -1792,3 +1832,5 @@ def main(cfg: Config):
 if __name__ == "__main__":
     config = parse_args()
     main(config)
+
+        
