@@ -27,6 +27,10 @@ from datetime import datetime
 from collections import Counter, defaultdict
 from torch.utils.data import WeightedRandomSampler
 
+# Add safe globals for numpy reconstruct
+import torch.serialization
+torch.serialization.add_safe_globals([np.core.multiarray._reconstruct])
+
 # PATCH START: Explicitly disable torch.compile to avoid 'torch._thread_safe_fork' error
 os.environ["TORCH_COMPILE_DISABLE"] = "1"
 # PATCH END
@@ -673,22 +677,10 @@ class TrainingLogger(TrainerCallback):
                 self.metrics['eval_theme_diversity'][idx] = diversity_metrics['entropy']
                 self.metrics['eval_theme_coverage'][idx] = diversity_metrics['coverage']
     
-    def save_rng_state(self, checkpoint_dir):
-        """Saves the RNG states of torch, numpy, and random."""
-        rng_state_path = Path(checkpoint_dir) / 'rng_state.pth'
-        rng_states = {
-            'torch_rng_state': torch.random.get_rng_state(),
-            'numpy_rng_state': np.random.get_state(),
-            'random_rng_state': random.getstate()
-        }
-        torch.save(rng_states, rng_state_path)
-        logger.info(f"💾 Saved RNG states to {rng_state_path}")
-
     def on_save(self, args, state, control, model=None, **kwargs):
         """Called when model checkpoint is saved"""
         checkpoint_dir = self.output_dir / f"checkpoint-{state.global_step}"
         self.save_metrics_and_plots(checkpoint_dir)
-        self.save_rng_state(checkpoint_dir)
         
         # Save theme tracker state if available
         if self.theme_tracker:
@@ -705,7 +697,6 @@ class TrainingLogger(TrainerCallback):
     def on_train_end(self, args, state, control, model=None, **kwargs):
         """Called at the end of training"""
         self.save_metrics_and_plots(self.output_dir, final=True)
-        self.save_rng_state(self.output_dir)
         
         # Final theme diversity report
         if self.theme_tracker:
@@ -1288,12 +1279,12 @@ class DeepSeekQwenTrainer:
             "gradient_accumulation_steps": default_grad_accum,
             "learning_rate": 5e-5,
             "weight_decay": 0.01,
-            "warmup_steps": 25,
+            "warmup_steps": 50,
             "logging_steps": 25,
-            "save_steps": 100,
-            "save_total_limit": 3,
+            "save_steps": 150,
+            "save_total_limit": 2,
             "eval_strategy": "steps" if has_validation else "no",
-            "eval_steps": 100 if has_validation else None,
+            "eval_steps": 50 if has_validation else None,
             "save_strategy": "steps",
             "load_best_model_at_end": has_validation,
             "metric_for_best_model": "eval_loss" if has_validation else None,
@@ -1337,11 +1328,6 @@ class DeepSeekQwenTrainer:
         """
         self.print_header()
         
-        # Add timestamp to output directory for versioning
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir_versioned = f"{output_dir}_{timestamp}"
-        logger.info(f"📁 Versioned output directory: {output_dir_versioned}")
-        
         try:
             # Step 1: Setup model and tokenizer with LoRA
             self.setup_model_and_tokenizer()
@@ -1364,7 +1350,7 @@ class DeepSeekQwenTrainer:
                 logger.info("DataLoader num_workers is 0, worker_init_fn not applied.")
 
             training_args = self.create_training_args(
-                output_dir=output_dir_versioned,
+                output_dir=output_dir,
                 has_validation=has_validation,
                 **training_kwargs
             )
@@ -1374,7 +1360,7 @@ class DeepSeekQwenTrainer:
             effective_batch_size = training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps
             logger.info(f"📦 Effective batch size: {training_args.per_device_train_batch_size} × {training_args.gradient_accumulation_steps} = {effective_batch_size}")
             logger.info(f"📈 Initial learning rate: {training_args.learning_rate}")
-            logger.info(f"💾 Output directory: {Path(output_dir_versioned).resolve()}")
+            logger.info(f"💾 Output directory: {Path(output_dir).resolve()}")
             logger.info(f"🚀 Training on: {DEVICE_INFO}")
             logger.info(f"🔌 FP16 (mixed precision): {training_args.fp16}")
             logger.info(f"💡 Gradient Checkpointing: {training_args.gradient_checkpointing}")
@@ -1393,7 +1379,7 @@ class DeepSeekQwenTrainer:
             
             # Step 4: Prepare data collator and custom logger
             data_collator = CustomDataCollator(self.tokenizer, max_length=512)
-            training_logger = TrainingLogger(output_dir_versioned, theme_tracker=self.theme_tracker)
+            training_logger = TrainingLogger(output_dir, theme_tracker=self.theme_tracker)
             
             # Step 5: Create theme-weighted sampler if enabled
             train_sampler = None
@@ -1423,14 +1409,10 @@ class DeepSeekQwenTrainer:
                 "callbacks": [training_logger],
             }
             
-            # Add custom sampler if available
-            # Note: HF Trainer doesn't directly support custom samplers, so we'd need to subclass
-            # For now, we'll note this limitation and suggest batch-level theme tracking instead
-            
             trainer = Trainer(**trainer_kwargs)
             
             # Step 7: Check for existing checkpoints
-            checkpoint_dir_path = Path(output_dir_versioned)
+            checkpoint_dir_path = Path(output_dir)
             last_checkpoint_path = self.find_last_checkpoint(checkpoint_dir_path)
             
             # Step 8: Start training
@@ -1438,21 +1420,6 @@ class DeepSeekQwenTrainer:
             
             if last_checkpoint_path:
                 logger.info(f"🔄 Resuming training from checkpoint: {last_checkpoint_path}")
-                
-                # RNG State Restoration
-                rng_state_path = Path(last_checkpoint_path) / 'rng_state.pth'
-                if rng_state_path.exists():
-                    logger.info(f"Loading RNG states from {rng_state_path}...")
-                    try:
-                        rng_states = torch.load(rng_state_path)
-                        torch.random.set_rng_state(rng_states['torch_rng_state'])
-                        np.random.set_state(rng_states['numpy_rng_state'])
-                        random.setstate(rng_states['random_rng_state'])
-                        logger.info("✅ Restored torch, numpy, and random RNG states.")
-                    except Exception as e:
-                        logger.warning(f"Failed to load RNG states: {e}")
-                else:
-                    logger.warning(f"RNG state file not found at {rng_state_path}")
                 
                 # Restore theme tracker state if available
                 theme_state_path = Path(last_checkpoint_path) / 'theme_tracker_state.json'
@@ -1486,20 +1453,20 @@ class DeepSeekQwenTrainer:
             
             # Step 9: Save final model
             logger.info("💾 Saving final model and tokenizer...")
-            trainer.save_model(output_dir_versioned)
-            self.tokenizer.save_pretrained(output_dir_versioned)
+            trainer.save_model(output_dir)
+            self.tokenizer.save_pretrained(output_dir)
             
             # Step 10: Final summary
             elapsed = time.time() - self.start_time
             self.print_section("Training Complete", "🎉")
             logger.info(f"⏱️  Total training duration: {elapsed/60:.1f} minutes ({elapsed:.0f} seconds)")
-            logger.info(f"📁 Final model saved to: {Path(output_dir_versioned).resolve()}")
-            logger.info(f"📊 Training plots: {Path(output_dir_versioned) / 'training_plots.png'}")
-            logger.info(f"📈 Loss plot: {Path(output_dir_versioned) / 'loss_focused.png'}")
-            logger.info(f"📋 Metrics JSON: {Path(output_dir_versioned) / 'training_metrics.json'}")
+            logger.info(f"📁 Final model saved to: {Path(output_dir).resolve()}")
+            logger.info(f"📊 Training plots: {Path(output_dir) / 'training_plots.png'}")
+            logger.info(f"📈 Loss plot: {Path(output_dir) / 'loss_focused.png'}")
+            logger.info(f"📋 Metrics JSON: {Path(output_dir) / 'training_metrics.json'}")
             
             if self.theme_tracker:
-                logger.info(f"🎨 Theme tracker data: {Path(output_dir_versioned) / 'theme_tracker_state.json'}")
+                logger.info(f"🎨 Theme tracker data: {Path(output_dir) / 'theme_tracker_state.json'}")
             
             return trainer
             
@@ -1555,9 +1522,9 @@ def main():
             
             learning_rate=5e-5,
             weight_decay=0.01,
-            warmup_steps=25,
+            warmup_steps=50,
             logging_steps=25,
-            save_steps=100,
+            save_steps=150,
             dataloader_num_workers=0,
         )
         
