@@ -444,7 +444,7 @@ base_model = AutoModelForCausalLM.from_pretrained(
 # Load LoRA adapter
 model = PeftModel.from_pretrained(
     base_model,
-    "./DeepSeek-R1-Distill-Qwen-1.5B-finetuned_20251106_061947/final"
+    "./DeepSeek-R1-Distill-Qwen-1.5B-finetuned/final"
 )
 
 tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
