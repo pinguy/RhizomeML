@@ -286,7 +286,7 @@ python3 train_script.py
 3. **Applies LoRA:** Efficient fine-tuning (9M trainable / 1.7B total params)
 4. **Enables theme weighting:** Rare themes get more training samples
 5. **Tracks diversity:** Monitors theme coverage during training
-6. **Saves checkpoints:** Every 100 steps with resumable state
+6. **Saves checkpoints:** Every 150 steps with resumable state
 7. **Generates plots:** Loss curves, learning rate, theme diversity
 
 **Expected output:**
