@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 @dataclass
 class Config:
-    base_dir: str = "./DeepSeek-R1-Distill-Qwen-1.5B-finetuned_*/"
+    base_dir: str = "./DeepSeek-R1-Distill-Qwen-1.5B-finetuned/"
     vosk_model_path: str = "vosk-model-en-us-0.42-gigaspeech"
     server_port: int = 7860
     auto_open_browser: bool = True
