@@ -965,7 +965,7 @@ watch -n 1 'ls -lh DeepSeek-R1-Distill-Qwen-1.5B-finetuned/checkpoint-*'
 
 **Home CPU (Xeon E5-2680 v4):** Electricity only
 - Training time: ~7 days
-- Total cost: ~$5-10 in electricity (depending on rates)
+- Total cost: ~?? in electricity (depending on rates and hardware)
 
 **Trade-off:** Time vs. money. If you have spare compute and no deadline, CPU wins.
 
@@ -1002,30 +1002,6 @@ Measured on held-out test set:
 
 ---
 
-## ⚖️ Ethical Considerations
-
-**Privacy:**
-- All processing happens locally - no data leaves your machine
-- Conversation exports may contain sensitive information
-- Review and sanitize data before training
-
-**Bias:**
-- Model inherits biases from your conversation history
-- Theme weighting helps but doesn't eliminate bias
-- Consider diversity of training sources
-
-**Use Cases:**
-- Intended for personal assistants, note-taking, research
-- Not suitable for medical/legal advice without validation
-- Not designed for production deployment without further testing
-
-**Responsibility:**
-- You are responsible for how you use the trained model
-- Respect intellectual property in training data
-- Be transparent about AI-generated content
-
----
-
 ## 🎓 Educational Value
 
 This project demonstrates:
@@ -1050,7 +1026,6 @@ This project demonstrates:
 2. **macOS ARM (M1/M2)** - QLoRA support unclear, needs testing
 3. **Gradio interface** - Alpha quality, UI needs work
 4. **FAISS retrieval** - Not yet integrated into inference
-5. **Checkpoint size** - Can grow large, consider periodic cleanup
 
 **Workarounds documented in Troubleshooting section.**
 
