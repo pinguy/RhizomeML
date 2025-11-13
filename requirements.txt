@@ -4,6 +4,7 @@ transformers
 datasets
 peft
 sentence-transformers
+bitsandbytes
 
 # Utility libraries
 numpy
