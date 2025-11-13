@@ -1,3 +1,5 @@
+# pip3 install bitsandbytes
+
 import os
 import torch
 import json
