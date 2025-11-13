@@ -1508,12 +1508,12 @@ class DeepSeekQwenTrainer:
             "gradient_accumulation_steps": default_grad_accum,
             "learning_rate": 5e-5,
             "weight_decay": 0.01,
-            "warmup_steps": 50,
-            "logging_steps": 25,
-            "save_steps": 150,
+            "warmup_steps": 15,
+            "logging_steps": 5,
+            "save_steps": 25,
             "save_total_limit": 2,
             "eval_strategy": "steps" if has_validation else "no",
-            "eval_steps": 50 if has_validation else None,
+            "eval_steps": 25 if has_validation else None,
             "save_strategy": "steps",
             "load_best_model_at_end": has_validation,
             "metric_for_best_model": "eval_loss" if has_validation else None,
@@ -1786,7 +1786,7 @@ def main():
             
             # NEW: Semantic and CPU optimization features
             use_theme_weighting=True,      # Theme-aware sampling
-            use_sequence_packing=False,    # CPU optimization (20-40% boost)
+            use_sequence_packing=True,    # CPU optimization (20-40% boost)
             use_cache=True,                # Cache tokenized dataset
             
             # Training parameters (auto-adjusted for CPU/GPU)
@@ -1798,9 +1798,9 @@ def main():
             
             learning_rate=5e-5,
             weight_decay=0.01,
-            warmup_steps=50,
-            logging_steps=25,
-            save_steps=150,
+            warmup_steps=15,
+            logging_steps=5,
+            save_steps=25,
             dataloader_num_workers=0,
         )
         
