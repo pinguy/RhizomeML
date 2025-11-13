@@ -301,7 +301,7 @@ python3 train_script.py
 - ✅ **BF16 precision** (5-10% speedup when compatible)
 - ✅ **Thread affinity tuning** (27 threads optimized)
 - ✅ **Sequence packing** (20-40% throughput boost)
-- ✅ **Micro-batching** (8×8 for stability)
+- ✅ **Micro-batching** (2×8 for stability)
 - ✅ **Dataset caching** (5-30% faster subsequent runs)
 - ✅ **Hard-frozen non-LoRA weights** (5-8% speedup)
 
@@ -326,13 +326,13 @@ python3 train_script.py
 
 ⚙️ Training Configuration
 🎯 Number of training epochs: 3
-📦 Effective batch size: 8 × 8 = 64
+📦 Effective batch size: 2 × 8 = 16
 🚀 Training on: CPU: 28 cores (using 27 threads)
 ⚡ CPU Optimizations Applied:
    • Threads: 27
    • BF16: Auto-detected
    • QLoRA 4-bit: True
-   • Micro-batching: batch=8, accum=8
+   • Micro-batching: batch=2, accum=8
    • Sequence packing: True
    • Dataset caching: True
 🎨 Theme-weighted sampling: ENABLED
@@ -342,7 +342,7 @@ python3 train_script.py
 
 | Hardware | Batch Size | Grad Accum | Quantization | Expected Time* |
 |----------|-----------|------------|--------------|----------------|
-| **CPU (Xeon E5-2680 v4)** | 8 | 8 | QLoRA 4-bit | 7-10 days** |
+| **CPU (Xeon E5-2680 v4)** | 2 | 8 | QLoRA 4-bit | 7-10 days** |
 | **RTX 3060 (12GB)** | 4 | 8 | QLoRA 4-bit | 6-8 hours |
 | **RTX 3090 (24GB)** | 8 | 4 | QLoRA 4-bit | 2-4 hours |
 | **8× V100 (32GB)** | 8 per GPU | 4 | QLoRA 4-bit | 45-90 min |
