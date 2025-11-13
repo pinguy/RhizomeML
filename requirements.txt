@@ -27,7 +27,7 @@ pdfminer.six
 PyMuPDF
 
 # Memory and embeddings
-faiss-cpu # or faiss-gpu
+faiss-cpu
 
 # Optional interactive/monitoring tools
 wandb
