@@ -18,6 +18,7 @@ librosa
 scipy
 soundfile
 kokoro
+vosk
 nltk
 keybert
 
