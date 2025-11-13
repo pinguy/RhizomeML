@@ -308,7 +308,7 @@ python3 train_script.py
 
 ⚙️ Training Configuration
 🎯 Number of training epochs: 3
-📦 Effective batch size: 2 × 32 = 64
+📦 Effective batch size: 2 × 8 = 16
 🚀 Training on: CPU: 28 cores (using 27 threads)
 🎨 Theme-weighted sampling: ENABLED
 ```
@@ -317,7 +317,7 @@ python3 train_script.py
 
 | Hardware | Batch Size | Grad Accum | FP16 | Expected Time* |
 |----------|-----------|------------|------|----------------|
-| **CPU Only** | 2 | 32 | No | 11-14 days |
+| **CPU Only** | 2 | 8 | No | 11-14 days |
 | **RTX 3060** | 4 | 8 | Yes | 8-12 hours |
 | **RTX 3090** | 8 | 4 | Yes | 3-5 hours |
 | **8× V100** | 8 per GPU | 4 | Yes | 1-2 hours |
