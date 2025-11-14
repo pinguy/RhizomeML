@@ -10,13 +10,14 @@ A modular pipeline for preparing, embedding, indexing, and fine-tuning dialogue 
 
 **Minimum Specs:** CPU with 8 threads and 16 GB RAM for training. You can reduce memory usage by adjusting the following values in `train_script.py`:
 
+* `default_batch_size`
+* `default_grad_accum`
 * `per_device_train_batch_size`
 * `gradient_accumulation_steps`
 
 **Recommended:** No GPU required. With a few tweaks, it’ll even run on a potato.
 
-- OpenAI Codex should chnages these values to 1 when running in the environment and swap the model out for microsoft/DialoGPT-small.
-
+- OpenAI Codex should chnages these values to 1 when running in the environment and swap the model out for Qwen/Qwen3-0.6B
 ---
 
 ## 🔧 Environment Setup
