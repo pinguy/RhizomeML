@@ -125,7 +125,7 @@ python3 data_formatter.py
 ### 5. Train the Model (LoRA)
 
 ```bash
-python3 train_script.py
+python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid
 ```
 
 > LoRA fine-tuning on Deepseek. Outputs go into `DeepSeek-R1-Distill-Qwen-1.5B-finetuned/`.
