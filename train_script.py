@@ -1,6 +1,20 @@
 # pip3 install bitsandbytes
 
 import os
+
+try:
+    config
+except NameError:
+    # This block is for demonstration if 'config' is not loaded externally.
+    # Replace 'YOUR_HF_TOKEN_HERE' with your actual token
+    config = {
+        "HF_TOKEN": "YOUR_HF_TOKEN_HERE", # <<< Ensure your token is here if config is hardcoded
+    }
+# -----------------------------------------------------------------------
+
+# Use "HF_TOKEN" as the key to set the Hugging Face authentication token. https://huggingface.co/settings/tokens
+os.environ["HF_TOKEN"] = config["HF_TOKEN"]
+
 import torch
 import json
 import matplotlib.pyplot as plt
