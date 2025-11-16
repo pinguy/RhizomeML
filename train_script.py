@@ -1346,7 +1346,7 @@ def load_tokenized_cache(cache_path):
             logger.warning(f"⚠️ Could not clean cache: {cleanup_error}")
     return None
 
-class Trainer:
+class RhizomeTrainer:
     """
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
@@ -1961,7 +1961,7 @@ class Trainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = Trainer(model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    trainer = RhizomeTrainer(model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
     
     try:
         # Call the main training function with desired parameters
