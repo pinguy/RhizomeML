@@ -1,10 +1,11 @@
 # pip3 install bitsandbytes
 
+
 import os
 
 try:
     config
-except NameError:    
+except NameError:
     # Replace 'YOUR_HF_TOKEN_HERE' with your actual token
     config = {
         "HF_TOKEN": "YOUR_HF_TOKEN_HERE", # <<< Ensure your token is here if config is hardcoded
@@ -1347,7 +1348,7 @@ def load_tokenized_cache(cache_path):
 
 class DeepSeekQwenTrainer:
     """
-    A wrapper class for fine-tuning DeepSeek-R1-Distill-Qwen-1.5B (or similar Causal LMs) using
+    A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
     def __init__(self, model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"):
@@ -1363,7 +1364,7 @@ class DeepSeekQwenTrainer:
     def print_header(self):
         """Prints a decorative header for the script output."""
         print("\n" + "═" * 70)
-        print("🤖 DeepSeek-R1-Distill-Qwen-1.5B Fine-Tuning Suite")
+        print("🤖 RhizomeML Fine-Tuning Suite")
         print("   🎨 Now with Semantic Theme-Aware Training!")
         print("   ⚡ CPU-Optimized with QLoRA 4-bit Support!")
         print("   Compatible with data_formatter.py output")
@@ -1629,7 +1630,7 @@ class DeepSeekQwenTrainer:
 
         return tokenized_dataset
     
-    def create_training_args(self, output_dir="./DeepSeek-R1-Distill-Qwen-1.5B-finetuned", 
+    def create_training_args(self, output_dir="./RhizomeML-finetuned", 
                             has_validation=False, **kwargs):
         """
         Creates and configures TrainingArguments for the Hugging Face Trainer.
@@ -1705,7 +1706,7 @@ class DeepSeekQwenTrainer:
             
         return TrainingArguments(**default_args)
     
-    def train(self, train_file, val_file=None, output_dir="./DeepSeek-R1-Distill-Qwen-1.5B-finetuned", 
+    def train(self, train_file, val_file=None, output_dir="./RhizomeML-finetuned", 
               use_theme_weighting=True, use_sequence_packing=True, use_cache=True, **training_kwargs):
         """
         Main function to orchestrate the fine-tuning process.
@@ -1967,7 +1968,7 @@ def main():
         result = trainer.train(
             train_file="data_finetune/dataset_train.jsonl",
             val_file="data_finetune/dataset_validation.jsonl",  # Enable validation for theme tracking
-            output_dir="./DeepSeek-R1-Distill-Qwen-1.5B-finetuned",
+            output_dir="./RhizomeML-finetuned",
             
             # NEW: Semantic and CPU optimization features
             use_theme_weighting=True,      # Theme-aware sampling
