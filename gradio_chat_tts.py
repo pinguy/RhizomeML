@@ -56,6 +56,17 @@ except ImportError:
     VOSK_AVAILABLE = False
     print("⚠️ Vosk not available. Install with: pip install vosk")
 
+# NEW: Import bitsandbytes
+try:
+    import bitsandbytes as bnb
+    from transformers import BitsAndBytesConfig
+    BNB_AVAILABLE = True
+    print("✅ bitsandbytes found - quantization available")
+except ImportError:
+    BNB_AVAILABLE = False
+    print("⚠️ bitsandbytes not available. Install with: pip install bitsandbytes")
+
+
 # Suppress warnings
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
@@ -82,6 +93,13 @@ class Config:
     ucs_save_path: str = "rhizome_memory.json"  # Use JSON format for compatibility
     ucs_auto_save_interval: int = 300  # Save every 5 minutes
     ucs_fast_retrieval: bool = True  # Use fast direct retrieval instead of full cognitive loop
+    
+    # NEW: BitsAndBytes Quantization
+    use_quantization: bool = True  # Enable/disable quantization
+    quantization_bits: int = 4  # 4-bit or 8-bit (4-bit recommended)
+    bnb_4bit_compute_dtype: str = "float16"  # Compute dtype
+    bnb_4bit_quant_type: str = "nf4"  # "nf4" or "fp4" (nf4 recommended)
+    bnb_4bit_use_double_quant: bool = True  # Nested quantization for extra savings
 
 config = Config()
 
@@ -523,10 +541,10 @@ class UCSEnhancedChatBot:
         ]
     
     def load_models(self) -> bool:
-        """Load Rhizome model and UCS system"""
+        """Load Rhizome model with optional quantization and UCS system"""
         try:
             # Load language model
-            logger.info(f"📄 Loading from {config.base_dir}...")
+            logger.info(f"📂 Loading from {config.base_dir}...")
             checkpoint_path = self._find_latest_checkpoint(config.base_dir)
             
             if not checkpoint_path:
@@ -537,6 +555,8 @@ class UCSEnhancedChatBot:
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
+                
+                # Load tokenizer
                 try:
                     self.tokenizer = AutoTokenizer.from_pretrained(
                         checkpoint_path,
@@ -547,15 +567,72 @@ class UCSEnhancedChatBot:
                     logger.error(f"Tokenizer loading failed: {e}")
                     raise
 
+                # Configure quantization
+                quantization_config = None
+                
+                if config.use_quantization and BNB_AVAILABLE and DEVICE.type == 'cuda':
+                    logger.info(f"🔧 Configuring {config.quantization_bits}-bit quantization...")
+                    
+                    if config.quantization_bits == 4:
+                        # 4-bit quantization (QLoRA) - most memory efficient
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=torch.float16 if config.bnb_4bit_compute_dtype == "float16" else torch.bfloat16,
+                            bnb_4bit_quant_type=config.bnb_4bit_quant_type,
+                            bnb_4bit_use_double_quant=config.bnb_4bit_use_double_quant,
+                        )
+                        logger.info("   - Using 4-bit NF4 quantization")
+                        logger.info("   - Expected memory: ~1-2GB for 1.5B model")
+                        
+                    elif config.quantization_bits == 8:
+                        # 8-bit quantization (LLM.int8()) - balanced
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_8bit=True,
+                            llm_int8_threshold=6.0,
+                            llm_int8_has_fp16_weight=False,
+                        )
+                        logger.info("   - Using 8-bit quantization")
+                        logger.info("   - Expected memory: ~2-3GB for 1.5B model")
+                
+                elif config.use_quantization and not BNB_AVAILABLE:
+                    logger.warning("⚠️ Quantization requested but bitsandbytes not available")
+                    logger.warning("   Install with: pip install bitsandbytes")
+                
+                elif config.use_quantization and DEVICE.type != 'cuda':
+                    logger.warning("⚠️ Quantization only supported on CUDA devices")
+                    logger.warning(f"   Current device: {DEVICE.type}")
+
+                # Load model with quantization
                 try:
+                    model_kwargs = {
+                        'trust_remote_code': True,
+                        'low_cpu_mem_usage': True,
+                    }
+                    
+                    if quantization_config is not None:
+                        # Quantized loading
+                        model_kwargs['quantization_config'] = quantization_config
+                        model_kwargs['device_map'] = 'auto'  # Let bitsandbytes handle device placement
+                        logger.info("📦 Loading quantized model (this may take a moment)...")
+                    else:
+                        # Standard loading
+                        model_kwargs['dtype'] = torch.float16 if DEVICE.type in ['cuda', 'mps'] else torch.float32
+                        model_kwargs['device_map'] = {'': DEVICE}
+                        logger.info("📦 Loading model without quantization...")
+                    
                     self.model = AutoModelForCausalLM.from_pretrained(
                         checkpoint_path,
-                        dtype=torch.float16 if DEVICE.type in ['cuda', 'mps'] else torch.float32,
-                        device_map={'': DEVICE},
-                        trust_remote_code=True,
-                        low_cpu_mem_usage=True
+                        **model_kwargs
                     )
-                    logger.info("✅ Model loaded successfully")
+                    
+                    if quantization_config is not None:
+                        logger.info("✅ Model loaded with quantization")
+                        if DEVICE.type == 'cuda':
+                            memory_used = torch.cuda.memory_allocated() / 1024**3
+                            logger.info(f"   - GPU memory used: {memory_used:.2f}GB")
+                    else:
+                        logger.info("✅ Model loaded successfully")
+                        
                 except Exception as e:
                     logger.error(f"Model loading failed: {e}")
                     raise
@@ -565,7 +642,9 @@ class UCSEnhancedChatBot:
                     self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
                 
                 self.model.eval()
-                logger.info(f"✅ Model loaded on {DEVICE}")
+                # Note: Device info might be 'auto' or complex with quantization, 
+                # but we log the primary intended device.
+                logger.info(f"✅ Model configured for {DEVICE}")
             
             # Initialize UCS
             if self.ucs_enabled:
@@ -692,7 +771,14 @@ class UCSEnhancedChatBot:
             base_path / "pytorch_model.bin",
             base_path / "model.safetensors"
         ]
-        if any(f.exists() for f in model_files):
+        # Check for safetensors or bin, plus config
+        has_config = (base_path / "config.json").exists()
+        has_model = (base_path / "model.safetensors").exists() or \
+                    (base_path / "pytorch_model.bin").exists() or \
+                    list(base_path.glob("*.safetensors")) or \
+                    list(base_path.glob("*.bin"))
+
+        if has_config and has_model:
             logger.info("✅ Using base directory as model path")
             return str(base_path)
 
@@ -709,7 +795,7 @@ class UCSEnhancedChatBot:
                 return_tensors="pt",
                 padding=True,
                 truncation=True
-            ).to(DEVICE)
+            ).to(self.model.device if hasattr(self.model, 'device') else DEVICE)
             
             _ = self.model.generate(
                 **inputs,
@@ -937,7 +1023,7 @@ class UCSEnhancedChatBot:
                     return_tensors="pt",
                     truncation=True,
                     max_length=2048
-                ).to(DEVICE)
+                ).to(self.model.device if hasattr(self.model, 'device') else DEVICE)
                 
                 input_length = inputs.input_ids.shape[1]
                 
@@ -1137,11 +1223,17 @@ class UCSEnhancedChatBot:
 - Memory: {system_stats.get('memory_percent', 0):.1f}%
 - Uptime: {system_stats.get('uptime', 0):.0f}s
 """
-        if 'gpu_name' in DEVICE_DETAILS:
-            stats_report += f"""
+        # Updated GPU stats logic to be safer
+        if 'gpu_name' in DEVICE_DETAILS and DEVICE.type == 'cuda':
+            try:
+                gpu_mem_used = system_stats.get('gpu_memory_used', torch.cuda.memory_allocated() / 1024**3)
+                gpu_mem_total = system_stats.get('gpu_memory_total', torch.cuda.get_device_properties(0).total_memory / 1024**3)
+                stats_report += f"""
 - GPU: {DEVICE_DETAILS['gpu_name']}
-- GPU Memory: {system_stats.get('gpu_memory_used', 0):.2f}/{system_stats.get('gpu_memory_total', 0):.2f}GB
+- GPU Memory: {gpu_mem_used:.2f}/{gpu_mem_total:.2f}GB
 """
+            except Exception:
+                stats_report += "- GPU: (Stats unavailable)\n"
         
         stats_report += f"""
 ---
@@ -1460,9 +1552,11 @@ def create_gradio_interface():
                 vosk_status = "✅ Vosk STT" if VOSK_AVAILABLE else "❌ Install: pip install vosk"
                 ucs_status = "✅ UCS v3.4.1" if chatbot.ucs_enabled else "❌ Limited (NumPy required)"
                 
+                # MODIFIED: Added Quantization status
                 gr.Markdown(f"""
 **Model:** {config.base_dir}
 **Device:** {DEVICE_INFO}
+**Quantization:** {"✅ " + str(config.quantization_bits) + "-bit" if config.use_quantization and BNB_AVAILABLE and DEVICE.type == 'cuda' else ("❌ Disabled" if not config.use_quantization else "⚠️ Not CUDA") }
 **TTS:** {tts_status}
 **STT:** {vosk_status}
 **UCS:** {ucs_status}
@@ -1476,6 +1570,12 @@ def create_gradio_interface():
 - 🎤 Voice input/output
 - 🎛️ Adjustable generation parameters
 - 📝 Customizable system prompts
+{"- 🔬 " + str(config.quantization_bits) + "-bit quantization for memory efficiency" if config.use_quantization and BNB_AVAILABLE and DEVICE.type == 'cuda' else ""}
+
+**Memory Savings with Quantization:**
+- 4-bit: ~75% reduction (~1-2GB for 1.5B model)
+- 8-bit: ~50% reduction (~2-3GB for 1.5B model)
+- No quantization: ~4-6GB for 1.5B model
 
 **System Prompt Presets:**
 - **Conversational**: Natural, friendly chat
@@ -1670,6 +1770,13 @@ def main():
     
     if VOSK_AVAILABLE:
         logger.info("🎤 Vosk STT enabled")
+    
+    if config.use_quantization and BNB_AVAILABLE and DEVICE.type == 'cuda':
+        logger.info(f"🔬 {config.quantization_bits}-bit quantization enabled")
+    elif config.use_quantization:
+        logger.warning("⚠️ Quantization requested but not available (requires CUDA + bitsandbytes)")
+    else:
+        logger.info("❌ Quantization disabled")
 
     if config.auto_open_browser:
         browser_thread = threading.Thread(target=open_browser)
