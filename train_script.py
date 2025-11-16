@@ -1488,7 +1488,7 @@ class DeepSeekQwenTrainer:
             logger.info("ℹ️ Skipping torch.compile (not needed on GPU)")
         
     def load_and_tokenize_data(self, train_file, val_file=None, max_length=512, 
-                               use_theme_weighting=True, use_sequence_packing=False,
+                               use_theme_weighting=True, use_sequence_packing=True,
                                use_cache=True):
         """Loads raw text data and tokenizes it, preparing for training."""
         self.print_section("Data Processing", "📚")
@@ -1625,13 +1625,13 @@ class DeepSeekQwenTrainer:
         # Auto-adjust batch size and gradient accumulation based on device
         if USE_CPU_ONLY:
             # CPU defaults with aggressive micro-batching
-            default_batch_size = 2  # Micro-batch size
-            default_grad_accum = 8  # To achieve effective batch of 16
+            default_batch_size = 8  # Micro-batch size
+            default_grad_accum = 8  # To achieve effective batch of 64
             default_fp16 = False
             default_gradient_checkpointing = False
         else:
             # GPU defaults
-            default_batch_size = 4
+            default_batch_size = 8
             default_grad_accum = 8
             default_fp16 = True
             default_gradient_checkpointing = True
@@ -1693,7 +1693,7 @@ class DeepSeekQwenTrainer:
         return TrainingArguments(**default_args)
     
     def train(self, train_file, val_file=None, output_dir="./DeepSeek-R1-Distill-Qwen-1.5B-finetuned", 
-              use_theme_weighting=True, use_sequence_packing=False, use_cache=True, **training_kwargs):
+              use_theme_weighting=True, use_sequence_packing=True, use_cache=True, **training_kwargs):
         """
         Main function to orchestrate the fine-tuning process.
         
