@@ -568,7 +568,7 @@ class ThemeTracker:
         counter = self.training_theme_counts if is_training else self.eval_theme_counts
         
         if not counter:
-            return {'unique_themes': 0, 'entropy': 0.0, 'coverage': 0.0}
+            return {'unique_themes': 0, 'entropy': 0.0, 'coverage': 0.0, 'total_occurrences': 0}
         
         total = sum(counter.values())
         unique = len(counter)
@@ -577,10 +577,11 @@ class ThemeTracker:
         entropy = 0.0
         for count in counter.values():
             p = count / total
-            entropy -= p * np.log2(p)
+            if p > 0: # Avoid log(0)
+                entropy -= p * np.log2(p)
         
         # Coverage: what fraction of known themes have we seen?
-        coverage = unique / len(self.global_theme_dist)
+        coverage = unique / len(self.global_theme_dist) if len(self.global_theme_dist) > 0 else 0.0
         
         return {
             'unique_themes': unique,
@@ -629,6 +630,10 @@ def create_theme_weighted_sampler(dataset, theme_tracker: ThemeTracker) -> Optio
         if missing_metadata > 0:
             logger.warning(f"⚠️ {missing_metadata}/{len(dataset)} examples missing theme metadata")
         
+        if not weights:
+             logger.warning("⚠️ No weights generated for sampler.")
+             return None
+             
         logger.info(f"📊 Sample weights - min: {min(weights):.3f}, max: {max(weights):.3f}, mean: {np.mean(weights):.3f}")
         
         return WeightedRandomSampler(weights, len(weights), replacement=True)
@@ -636,6 +641,82 @@ def create_theme_weighted_sampler(dataset, theme_tracker: ThemeTracker) -> Optio
     except Exception as e:
         logger.warning(f"⚠️ Could not create weighted sampler: {e}")
         return None
+
+# ============================================================================
+# NEW: Theme-Aware Trainer
+# ============================================================================
+
+class ThemeAwareTrainer(Trainer):
+    """
+    A custom Trainer that tracks semantic themes during training.
+    
+    This trainer intercepts the training step to sample and record themes,
+    allowing the TrainingLogger to report on diversity metrics.
+    """
+    def __init__(self, *args, theme_tracker: Optional[ThemeTracker] = None, 
+                 original_dataset: Optional[Any] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.theme_tracker = theme_tracker
+        self.original_dataset = original_dataset
+        self.original_dataset_size = len(original_dataset) if original_dataset else 0
+        if not theme_tracker:
+            logger.warning("ThemeAwareTrainer initialized without a ThemeTracker!")
+        if not original_dataset:
+            logger.warning("ThemeAwareTrainer initialized without an original_dataset!")
+
+    def training_step(self, model: torch.nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], *args, **kwargs) -> torch.Tensor:
+        """
+        Perform a training step and record themes from the batch.
+        """
+        # Get loss from the standard training step
+        loss = super().training_step(model, inputs)
+        
+        # --- Theme Tracking Logic ---
+        if self.theme_tracker and self.original_dataset and self.original_dataset_size > 0:
+            try:
+                # Get batch size
+                batch_size = inputs["input_ids"].shape[0]
+                
+                # Sample random indices from the original dataset as an approximation
+                # This is what the user's prompt described
+                random_indices = np.random.randint(0, self.original_dataset_size, size=batch_size)
+                sampled_examples = self.original_dataset.select(random_indices)
+                
+                batch_themes = []
+                for example in sampled_examples:
+                    themes = ['general'] # Default
+                    if 'source_metadata' in example and example['source_metadata']:
+                        metadata = example['source_metadata']
+                        if isinstance(metadata, str):
+                            try:
+                                metadata = json.loads(metadata)
+                            except:
+                                metadata = {}
+                        
+                        if isinstance(metadata, dict):
+                            themes = metadata.get('themes', metadata.get('phrase_themes', ['general']))
+                            if not themes:
+                                themes = ['general']
+                    
+                    batch_themes.append(themes)
+                
+                # Record the themes
+                self.theme_tracker.record_batch_themes(batch_themes, is_training=True)
+
+                # Log diversity metrics every 100 steps (as per user's prompt)
+                if self.state.global_step > 0 and self.state.global_step % 100 == 0:
+                    metrics = self.theme_tracker.get_diversity_metrics(is_training=True)
+                    self.log({
+                        "train_theme_entropy": metrics['entropy'],
+                        "train_theme_coverage": metrics['coverage'],
+                        "train_unique_themes": metrics['unique_themes']
+                    })
+
+            except Exception as e:
+                # Don't crash training if theme tracking fails
+                logger.warning(f"⚠️ Error during theme tracking in training_step: {e}", exc_info=False)
+        
+        return loss
 
 class TrainingLogger(TrainerCallback):
     """Custom callback to log and visualize training metrics with semantic tracking"""
@@ -706,6 +787,25 @@ class TrainingLogger(TrainerCallback):
                 self.metrics['grad_norm'][-1] = logs['grad_norm']
             else:
                 self.metrics['grad_norm'].append(logs['grad_norm'])
+
+        # --- PATCHED IN ---
+        # NEW: Handle theme metrics logged from ThemeAwareTrainer
+        if 'train_theme_entropy' in logs:
+            if len(self.metrics['train_theme_diversity']) < len(self.metrics['step']):
+                self.metrics['train_theme_diversity'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_theme_diversity'])))
+            if len(self.metrics['train_theme_diversity']) == len(self.metrics['step']):
+                self.metrics['train_theme_diversity'][-1] = logs['train_theme_entropy']
+            else:
+                self.metrics['train_theme_diversity'].append(logs['train_theme_entropy'])
+                
+        if 'train_theme_coverage' in logs:
+            if len(self.metrics['train_theme_coverage']) < len(self.metrics['step']):
+                self.metrics['train_theme_coverage'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_theme_coverage'])))
+            if len(self.metrics['train_theme_coverage']) == len(self.metrics['step']):
+                self.metrics['train_theme_coverage'][-1] = logs['train_theme_coverage']
+            else:
+                self.metrics['train_theme_coverage'].append(logs['train_theme_coverage'])
+        # --- END PATCH ---
                 
         # Performance metrics
         for key in ['train_runtime', 'train_samples_per_second', 'train_steps_per_second']:
@@ -839,7 +939,7 @@ class TrainingLogger(TrainerCallback):
         epochs = metrics['epoch']
         
         # Determine if we have semantic metrics
-        has_semantic = any(metrics.get('eval_theme_diversity', [None])[0] is not None for _ in range(1))
+        has_semantic = any(metrics.get('eval_theme_diversity', [None])) or any(metrics.get('train_theme_diversity', [None]))
         
         # Create subplots - add extra row if we have semantic metrics
         n_rows = 3 if has_semantic else 2
@@ -978,14 +1078,26 @@ class TrainingLogger(TrainerCallback):
             
             # Plot 9: Combined Semantic Quality Score
             ax9 = axes[2, 2]
-            if train_diversity and train_coverage:
-                # Create a combined score: diversity * coverage
-                combined_score = [d * c for d, c in zip(train_diversity, train_coverage)]
-                combined_steps = [steps[i] for i, x in enumerate(metrics.get('train_theme_diversity', [])) if x is not None]
-                ax9.plot(combined_steps, combined_score, 'purple', linewidth=2)
-                ax9.set_xlabel('Steps')
-                ax9.set_ylabel('Combined Score')
-                ax9.set_title('Semantic Quality Score\n(Diversity × Coverage)')
+            
+            # Use train_diversity and train_coverage data
+            train_diversity_data = [(steps[i], x) for i, x in enumerate(metrics.get('train_theme_diversity', [])) if x is not None]
+            train_coverage_data = [(steps[i], x) for i, x in enumerate(metrics.get('train_theme_coverage', [])) if x is not None]
+            
+            if train_diversity_data and train_coverage_data:
+                # Need to align steps
+                diversity_map = dict(train_diversity_data)
+                coverage_map = dict(train_coverage_data)
+                
+                common_steps = sorted(list(set(diversity_map.keys()) & set(coverage_map.keys())))
+                
+                if common_steps:
+                    combined_score = [diversity_map[step] * coverage_map[step] for step in common_steps]
+                    ax9.plot(common_steps, combined_score, 'purple', linewidth=2)
+                    ax9.set_xlabel('Steps')
+                    ax9.set_ylabel('Combined Score')
+                    ax9.set_title('Semantic Quality Score\n(Diversity × Coverage)')
+                else:
+                    ax9.text(0.5, 0.5, 'No Aligned Semantic Data', ha='center', va='center', transform=ax9.transAxes)
             else:
                 ax9.text(0.5, 0.5, 'No Semantic Score Data', ha='center', va='center', transform=ax9.transAxes)
             ax9.grid(True, alpha=0.3)
@@ -1004,7 +1116,12 @@ class TrainingLogger(TrainerCallback):
     def create_loss_focused_plot(self, save_dir, metrics, final=False):
         """Creates a dedicated, higher-resolution plot just for training and validation loss."""
         
-        plt.style.use('seaborn-v0_8-darkgrid')
+        # Try to use a nice style
+        try:
+            plt.style.use('seaborn-v0_8-darkgrid')
+        except:
+            plt.style.use('dark_background') # Fallback
+
         plt.figure(figsize=(12, 8))
         
         steps = metrics['step']
@@ -1176,7 +1293,8 @@ def load_semantic_metadata(metadata_path: str = "data_finetune/dataset_metadata.
             logger.info(f"   - Top 10 themes:")
             for theme, count in top_themes[:5]:  # Only show top 5 in initial log
                 logger.info(f"     • {theme}: {count}")
-            logger.info(f"     ... and {len(theme_dist) - 5} more themes")
+            if len(top_themes) > 5:
+                logger.info(f"     ... and {len(theme_dist) - 5} more themes")
         
         return metadata
         
@@ -1226,6 +1344,8 @@ class DeepSeekQwenTrainer:
         self.start_time = time.time()
         self.semantic_metadata = {}
         self.theme_tracker = None
+        self.original_train_dataset = None # <-- Store original dataset
+        self.use_theme_weighting = False
         
     def print_header(self):
         """Prints a decorative header for the script output."""
@@ -1384,7 +1504,17 @@ class DeepSeekQwenTrainer:
             cached = load_tokenized_cache(str(cache_dir))
             if cached is not None:
                 logger.info("⚡ Using cached tokenized dataset!")
-                self.original_train_dataset = cached["train"]
+                # We still need the original dataset for theme tracking
+                logger.info("Loading original dataset for theme tracking...")
+                original_dataset = load_dataset("json", data_files={"train": train_file})
+                self.original_train_dataset = original_dataset["train"]
+                
+                # Re-initialize theme tracker
+                metadata_path = Path(train_file).parent / "dataset_metadata.json"
+                self.semantic_metadata = load_semantic_metadata(str(metadata_path))
+                if self.semantic_metadata and 'theme_distribution' in self.semantic_metadata:
+                    self.theme_tracker = ThemeTracker(self.semantic_metadata['theme_distribution'])
+                
                 self.use_theme_weighting = use_theme_weighting and self.theme_tracker is not None
                 return cached
         
@@ -1428,12 +1558,15 @@ class DeepSeekQwenTrainer:
             )
         
         print("\n🔄 Tokenizing dataset...")
+        # Keep original columns for theme tracking, remove them later
+        original_columns = dataset["train"].column_names
+        
         tokenized_dataset = dataset.map(
             tokenize_function,
             batched=True,
             batch_size=1000,
-            remove_columns=dataset["train"].column_names,
-            num_proc=1,
+            num_proc=1, # Use 1 proc to avoid issues with map and state
+            remove_columns=original_columns, # <-- FIX 1: Add this line
             desc="Tokenizing"
         )
         logger.info("✅ Dataset tokenization complete.")
@@ -1470,13 +1603,16 @@ class DeepSeekQwenTrainer:
             except Exception as e:
                 logger.warning(f"⚠️ Sequence packing failed: {e}")
         
-        # Save to cache
-        if use_cache:
-            save_tokenized_cache(tokenized_dataset, str(cache_dir))
-        
         # Store the original dataset for theme-weighted sampling
         self.original_train_dataset = dataset["train"]
         self.use_theme_weighting = use_theme_weighting and self.theme_tracker is not None
+        
+        # Now remove original columns from the *tokenized* dataset
+        # tokenized_dataset = tokenized_dataset.remove_columns(original_columns) # <-- FIX 2: Delete this line
+
+        # Save to cache
+        if use_cache:
+            save_tokenized_cache(tokenized_dataset, str(cache_dir))
 
         return tokenized_dataset
     
@@ -1512,8 +1648,8 @@ class DeepSeekQwenTrainer:
             "logging_steps": 25,
             "save_steps": 150,
             "save_total_limit": 2,
-            "eval_strategy": "steps" if has_validation else "no",
-            "eval_steps": 100 if has_validation else None,
+            "eval_strategy": "steps" if has_validation else "no", # Use old name, as per error
+            "eval_steps": 150 if has_validation else None,
             "save_strategy": "steps",
             "load_best_model_at_end": has_validation,
             "metric_for_best_model": "eval_loss" if has_validation else None,
@@ -1536,11 +1672,24 @@ class DeepSeekQwenTrainer:
         }
         
         default_args["use_cpu"] = USE_CPU_ONLY
-        default_args["local_rank"] = -1
+        # local_rank is deprecated/handled internally
+        # default_args["local_rank"] = -1 
         default_args["ddp_find_unused_parameters"] = False
 
         # Override defaults with user-provided arguments
         default_args.update(kwargs)
+        
+        # Handle potential arg name changes (evaluation_strategy vs eval_strategy)
+        # The user's error indicates it expects 'eval_strategy'.
+        # If 'evaluation_strategy' was passed in kwargs, rename it.
+        if "evaluation_strategy" in default_args and "eval_strategy" not in default_args:
+            logger.info("Renaming 'evaluation_strategy' to 'eval_strategy' for compatibility.")
+            default_args["eval_strategy"] = default_args.pop("evaluation_strategy")
+        elif "eval_strategy" in default_args and "evaluation_strategy" in default_args:
+            # If both exist (e.g., from kwargs), remove the one that causes the error
+            logger.info("Both 'eval_strategy' and 'evaluation_strategy' found. Removing 'evaluation_strategy'.")
+            default_args.pop("evaluation_strategy")
+            
         return TrainingArguments(**default_args)
     
     def train(self, train_file, val_file=None, output_dir="./DeepSeek-R1-Distill-Qwen-1.5B-finetuned", 
@@ -1655,7 +1804,23 @@ class DeepSeekQwenTrainer:
                 "callbacks": [training_logger],
             }
             
-            trainer = Trainer(**trainer_kwargs)
+            # --- PATCHED IN ---
+            # Use ThemeAwareTrainer if theme tracking is enabled
+            if self.theme_tracker and self.original_train_dataset:
+                logger.info("Using ThemeAwareTrainer to track semantic diversity")
+                trainer = ThemeAwareTrainer(
+                    theme_tracker=self.theme_tracker,
+                    original_dataset=self.original_train_dataset,
+                    **trainer_kwargs
+                )
+            else:
+                logger.info("Using standard Trainer")
+                if not self.theme_tracker:
+                     logger.warning("Theme tracking disabled (no theme_tracker)")
+                if not self.original_train_dataset:
+                     logger.warning("Theme tracking disabled (no original_dataset)")
+                trainer = Trainer(**trainer_kwargs)
+            # --- END PATCH ---
             
             # Step 7: Check for existing checkpoints
             checkpoint_dir_path = Path(output_dir)
@@ -1724,6 +1889,8 @@ class DeepSeekQwenTrainer:
             logger.info(f"📋 Metrics JSON: {Path(output_dir) / 'training_metrics.json'}")
             
             if self.theme_tracker:
+                # Call one last time to ensure final state is saved
+                training_logger.on_train_end(training_args, trainer.state, None)
                 logger.info(f"🎨 Theme tracker data: {Path(output_dir) / 'theme_tracker_state.json'}")
             
             # Print optimization summary for CPU
@@ -1738,21 +1905,22 @@ class DeepSeekQwenTrainer:
                 logger.info(f"  ✓ Micro-batching: {training_args.per_device_train_batch_size}×{training_args.gradient_accumulation_steps}")
                 logger.info(f"  ✓ Sequence packing: {use_sequence_packing}")
                 logger.info(f"  ✓ Dataset caching: {use_cache}")
-                logger.info(f"  ✓ Hard-frozen non-LoRA weights")
-                logger.info(f"  ✓ DataLoader memory pinning")
                 logger.info("="*70 + "\n")
             
             return trainer
             
         except KeyboardInterrupt:
             logger.info("ℹ️ Training interrupted by user.")
+            if self.theme_tracker:
+                logger.info("Saving final theme tracker state before exiting...")
+                training_logger.on_train_end(None, None, None) # Try to save final report
             return None
         except Exception as e:
             logger.error(f"❌ Unexpected error during training: {e}", exc_info=True)
             raise
     
     @staticmethod
-    def find_last_checkpoint(checkpoint_dir):
+    def find_last_checkpoint(checkpoint_dir: Path):
         """Helper function to locate the most recent checkpoint directory."""
         if not checkpoint_dir.exists():
             logger.info(f"No checkpoint directory found at {checkpoint_dir}. Starting fresh.")
@@ -1767,9 +1935,13 @@ class DeepSeekQwenTrainer:
             logger.info(f"No existing checkpoints found in {checkpoint_dir}. Starting fresh.")
             return None
             
-        last_checkpoint = max(checkpoints, key=lambda x: int(x.name.split("-")[-1]))
-        logger.info(f"Found existing checkpoint: {last_checkpoint}")
-        return last_checkpoint
+        try:
+            last_checkpoint = max(checkpoints, key=lambda x: int(x.name.split("-")[-1]))
+            logger.info(f"Found existing checkpoint: {last_checkpoint}")
+            return str(last_checkpoint) # Return string path
+        except Exception as e:
+             logger.warning(f"Could not determine last checkpoint: {e}")
+             return None
 
 
 def main():
@@ -1781,7 +1953,7 @@ def main():
         # Call the main training function with desired parameters
         result = trainer.train(
             train_file="data_finetune/dataset_train.jsonl",
-            #val_file="data_finetune/dataset_validation.jsonl",  # Enable validation for theme tracking
+            val_file="data_finetune/dataset_validation.jsonl",  # Enable validation for theme tracking
             output_dir="./DeepSeek-R1-Distill-Qwen-1.5B-finetuned",
             
             # NEW: Semantic and CPU optimization features
