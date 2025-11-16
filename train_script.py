@@ -1625,8 +1625,8 @@ class DeepSeekQwenTrainer:
         # Auto-adjust batch size and gradient accumulation based on device
         if USE_CPU_ONLY:
             # CPU defaults with aggressive micro-batching
-            default_batch_size = 8  # Micro-batch size
-            default_grad_accum = 8  # To achieve effective batch of 64
+            default_batch_size = 4  # Micro-batch size
+            default_grad_accum = 4  # To achieve effective batch of 16
             default_fp16 = False
             default_gradient_checkpointing = False
         else:
@@ -1965,8 +1965,8 @@ def main():
             num_train_epochs=3,
             # Note: batch_size and gradient_accumulation will auto-adjust based on device
             # You can still override them:
-            # per_device_train_batch_size=8,   # Micro-batch for CPU
-            # gradient_accumulation_steps=8,   # Accumulate to effective batch of 64
+            #per_device_train_batch_size=2,   # Micro-batch for CPU
+            #gradient_accumulation_steps=8,   # Accumulate to effective batch of 16
             
             learning_rate=5e-5,
             weight_decay=0.01,
