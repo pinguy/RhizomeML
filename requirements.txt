@@ -5,6 +5,7 @@ datasets
 peft
 sentence-transformers
 bitsandbytes
+flash-attn
 
 # Utility libraries
 numpy
