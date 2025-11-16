@@ -4,8 +4,7 @@ import os
 
 try:
     config
-except NameError:
-    # This block is for demonstration if 'config' is not loaded externally.
+except NameError:    
     # Replace 'YOUR_HF_TOKEN_HERE' with your actual token
     config = {
         "HF_TOKEN": "YOUR_HF_TOKEN_HERE", # <<< Ensure your token is here if config is hardcoded
