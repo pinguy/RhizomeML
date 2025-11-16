@@ -1,6 +1,3 @@
-# pip3 install bitsandbytes
-
-
 import os
 
 try:
