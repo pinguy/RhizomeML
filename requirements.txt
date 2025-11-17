@@ -1,5 +1,5 @@
 # Core libraries for training and inference
-torch
+torch==2.3.0
 transformers
 datasets
 peft
