@@ -50,7 +50,7 @@ git clone https://github.com/yourusername/RhizomeML.git
 cd RhizomeML
 
 # Install dependencies
-pip3 install -r requirements.txt
+pip3 install -r requirements.txt --upgrade
 
 # Install bitsandbytes for QLoRA (CPU and GPU)
 pip3 install bitsandbytes
