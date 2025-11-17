@@ -1,11 +1,10 @@
 # Core libraries for training and inference
-torch==2.3.0
+torch
 transformers
 datasets
 peft
 sentence-transformers
 bitsandbytes
-flash-attn
 
 # Utility libraries
 numpy
