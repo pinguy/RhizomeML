@@ -17,7 +17,7 @@ A modular pipeline for preparing, embedding, indexing, and fine-tuning dialogue 
 
 **Recommended:** No GPU required. With a few tweaks, it’ll even run on a potato.
 
-- OpenAI Codex should chnages these values to 1 when running in the environment and swap the model out for EleutherAI/gpt-neo-125m
+- OpenAI Codex should change these values to 1 when running in the environment and swap the model out for EleutherAI/gpt-neo-125m
 ---
 
 ## 🔧 Environment Setup
