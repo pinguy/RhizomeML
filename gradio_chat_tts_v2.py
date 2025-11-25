@@ -92,7 +92,7 @@ class Config:
     ucs_embed_model: str = "all-MiniLM-L12-v2"  # Sentence transformer model
     ucs_save_path: str = "rhizome_memory.json"  # Use JSON format for compatibility
     ucs_auto_save_interval: int = 300  # Save every 5 minutes
-    ucs_fast_retrieval: bool = True  # Use fast direct retrieval instead of full cognitive loop
+    ucs_fast_retrieval: bool = False  # False = use full cognitive loop with experts, True = fast direct retrieval
     
     # NEW: BitsAndBytes Quantization
     use_quantization: bool = True  # Enable/disable quantization
@@ -871,60 +871,114 @@ class UCSEnhancedChatBot:
         
         return response.strip()
     
-    async def _retrieve_context_from_ucs(self, user_input: str) -> Tuple[Optional[str], List[Tuple[str, float]]]:
-        """Retrieve relevant context from UCS memory (lightweight version)"""
+    async def _retrieve_context_from_ucs(self, user_input: str, use_full_cognitive_loop: bool = False) -> Tuple[Optional[str], List[Tuple[str, float]]]:
+        """
+        Retrieve relevant context from UCS memory.
+        
+        Args:
+            user_input: The user's query
+            use_full_cognitive_loop: If True, use full expert system deliberation.
+                                    If False, use fast direct vector retrieval.
+        """
         if not self.ucs_enabled or not self.ucs:
             return None, []
         
         try:
-            # Fast path: Direct memory retrieval without full cognitive loop
-            # This avoids the expensive expert system deliberation
-            
             # Check if query needs memory retrieval
             needs_retrieval = any(word in user_input.lower() for word in 
                                  ["remember", "earlier", "before", "you said", "we talked", 
-                                  "you mentioned", "last time", "previously"])
+                                  "you mentioned", "last time", "previously", "recall",
+                                  "what did", "did you", "have we"])
             
-            if not needs_retrieval and len(user_input.split()) < 15:
-                # Short queries without memory keywords - skip retrieval
+            # Lower threshold - retrieve for any reasonably complex query
+            if not needs_retrieval and len(user_input.split()) < 5:
+                # Very short queries without memory keywords - skip retrieval
                 return None, []
             
-            # Direct vector retrieval (fast)
-            query_vec = self.ucs._embed(user_input)
-            retrieved_mementos = self.ucs.vmem.retrieve(
-                query_vec, 
-                top_k=3,  # Reduced from 5 for speed
-                use_advanced=True,
-                use_cache=True
+            if use_full_cognitive_loop:
+                # Full cognitive loop with expert deliberation
+                return await self._run_full_ucs_loop(user_input)
+            else:
+                # Fast path: Direct memory retrieval
+                return await self._fast_retrieval(user_input)
+            
+        except Exception as e:
+            logger.warning(f"UCS retrieval failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, []
+    
+    async def _run_full_ucs_loop(self, user_input: str) -> Tuple[Optional[str], List[Tuple[str, float]]]:
+        """Run the full UCS cognitive loop with expert deliberation."""
+        try:
+            # Run the full cognitive loop
+            result = await self.ucs.run_async(
+                prompt=user_input,
+                actions=None,  # Let experts decide
+                iters=3  # Limit iterations for responsiveness
             )
             
-            self.stats['ucs_retrievals'] += 1
+            self.stats['ucs_expert_calls'] += 1
             
-            if not retrieved_mementos:
-                return None, []
-            
-            # Build context from top mementos
+            # Extract retrieval results from the blackboard history
+            retrieved_mementos = []
             context_parts = []
-            for mid, score in retrieved_mementos:
-                if score < 0.5:  # Skip low-relevance results
-                    continue
-                    
-                if mid in self.ucs.vmem.mementos:
-                    content = self.ucs.vmem.mementos[mid].get('content', '')
-                    if content:
-                        # Trim long content
-                        content_preview = content[:150] + "..." if len(content) > 150 else content
-                        context_parts.append(f"[{score:.2f}] {content_preview}")
             
+            for item in result.get("history", []):
+                if isinstance(item, dict) and "retrieval" in item:
+                    for mid, score in item["retrieval"]:
+                        retrieved_mementos.append((mid, score))
+                        if score >= 0.4 and mid in self.ucs.vmem.mementos:
+                            content = self.ucs.vmem.mementos[mid].get('content', '')
+                            if content:
+                                content_preview = content[:200] + "..." if len(content) > 200 else content
+                                context_parts.append(f"[{score:.2f}] {content_preview}")
+            
+            self.stats['ucs_retrievals'] += 1
             context_text = "\n".join(context_parts) if context_parts else None
             
-            logger.debug(f"📚 Retrieved {len(retrieved_mementos)} mementos in fast mode")
+            logger.info(f"🧠 Full UCS loop completed: {len(retrieved_mementos)} retrievals, {result.get('metrics', {}).get('iters', 0)} iterations")
             
             return context_text, retrieved_mementos
             
         except Exception as e:
-            logger.warning(f"UCS retrieval failed: {e}")
+            logger.warning(f"Full UCS loop failed, falling back to fast retrieval: {e}")
+            return await self._fast_retrieval(user_input)
+    
+    async def _fast_retrieval(self, user_input: str) -> Tuple[Optional[str], List[Tuple[str, float]]]:
+        """Fast direct vector retrieval without expert deliberation."""
+        # Direct vector retrieval (fast)
+        query_vec = self.ucs._embed(user_input)
+        retrieved_mementos = self.ucs.vmem.retrieve(
+            query_vec, 
+            top_k=5,
+            use_advanced=True,
+            use_cache=True
+        )
+        
+        self.stats['ucs_retrievals'] += 1
+        
+        if not retrieved_mementos:
             return None, []
+        
+        # Build context from top mementos
+        context_parts = []
+        for mid, score in retrieved_mementos:
+            if score < 0.4:  # Skip low-relevance results
+                continue
+                
+            if mid in self.ucs.vmem.mementos:
+                content = self.ucs.vmem.mementos[mid].get('content', '')
+                if content:
+                    # Trim long content
+                    content_preview = content[:200] + "..." if len(content) > 200 else content
+                    context_parts.append(f"[{score:.2f}] {content_preview}")
+        
+        context_text = "\n".join(context_parts) if context_parts else None
+        
+        logger.debug(f"📚 Fast retrieval: {len(retrieved_mementos)} mementos")
+        
+        return context_text, retrieved_mementos
     
     def _store_conversation_in_ucs(self, user_input: str, response: str):
         """Store conversation turn in UCS memory"""
@@ -999,9 +1053,14 @@ class UCSEnhancedChatBot:
         
         if use_ucs and self.ucs_enabled:
             try:
-                retrieved_context, retrieved_mementos = await self._retrieve_context_from_ucs(user_input)
+                # Use full cognitive loop if configured (slower but uses experts)
+                use_full_loop = not config.ucs_fast_retrieval
+                retrieved_context, retrieved_mementos = await self._retrieve_context_from_ucs(
+                    user_input, 
+                    use_full_cognitive_loop=use_full_loop
+                )
                 if retrieved_context:
-                    logger.info(f"📚 Retrieved {len(retrieved_mementos)} relevant mementos")
+                    logger.info(f"📚 Retrieved {len(retrieved_mementos)} relevant mementos (full_loop={use_full_loop})")
             except Exception as e:
                 logger.warning(f"UCS retrieval error: {e}")
         
