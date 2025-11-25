@@ -81,7 +81,7 @@ class Config:
     auto_open_browser: bool = True
     max_cache_size: int = 100
     max_response_length: int = 512
-    tts_max_length: int = 500
+    tts_max_length: int = 2000  # ~120 seconds of TTS
     memory_cleanup_threshold: float = 0.6
     show_reasoning: bool = False
     use_system_prompt: bool = False
@@ -283,8 +283,19 @@ class AsyncTTSProcessor:
         return self.executor.submit(self._generate_tts, text, voice, speed)
     
     def _generate_tts(self, text: str, voice: str, speed: float) -> Optional[str]:
-        if not self.tts_pipeline or len(text) > config.tts_max_length:
+        if not self.tts_pipeline:
             return None
+        
+        # Truncate if too long (instead of rejecting)
+        if len(text) > config.tts_max_length:
+            text = text[:config.tts_max_length]
+            # Try to end at a sentence boundary
+            last_period = text.rfind('.')
+            last_question = text.rfind('?')
+            last_exclaim = text.rfind('!')
+            last_sentence = max(last_period, last_question, last_exclaim)
+            if last_sentence > config.tts_max_length // 2:
+                text = text[:last_sentence + 1]
             
         try:
             # Clean and prepare text for TTS
@@ -300,7 +311,7 @@ class AsyncTTSProcessor:
             clean_text = re.sub(r'([.!?])\s*([A-Z])', r'\1 \2', clean_text)
             
             # Split into chunks if too long (helps with generation)
-            max_chunk_size = 200  # characters per chunk
+            max_chunk_size = 350  # characters per chunk - balanced for quality and speed
             if len(clean_text) > max_chunk_size:
                 # Split on sentence boundaries
                 sentences = re.split(r'([.!?]+\s+)', clean_text)
@@ -433,7 +444,7 @@ class EnhancedVoiceTranscriber:
                 output_path, '-y'
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             return result.returncode == 0
         except:
             try:
@@ -1223,7 +1234,7 @@ class UCSEnhancedChatBot:
             audio_file = None
             if tts_future:
                 try:
-                    audio_file = tts_future.result(timeout=10.0)  # Increased timeout for longer text
+                    audio_file = tts_future.result(timeout=120.0)  # 120s timeout for longer TTS
                 except Exception as tts_error:
                     logger.warning(f"TTS timeout or error: {tts_error}")
             
