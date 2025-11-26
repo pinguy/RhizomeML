@@ -6,7 +6,7 @@ for memory-augmented, expert-guided conversations.
 This version automatically detects and uses the model's native chat template,
 making it compatible with any instruction-tuned model (Gemma, Llama, Mistral, Qwen, etc.)
 
-checkpoint_path = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+checkpoint_path = "google/gemma-3-4b-it-qat-int4-unquantized"
 checkpoint_path = self._find_latest_checkpoint(config.base_dir)
 """
 
@@ -27,11 +27,11 @@ import webbrowser
 import uuid
 import gc
 import concurrent.futures
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
 import logging
 import multiprocessing
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Generator
 from contextlib import contextmanager
 import psutil
 from pathlib import Path
@@ -1564,6 +1564,190 @@ class UCSEnhancedChatBot:
         ]
         return np.random.choice(fallbacks), "fallback"
     
+    def generate_response_streaming(self, user_input: str, show_reasoning: bool = False,
+                                    use_ucs: bool = True, temperature: float = None,
+                                    top_p: float = None, top_k: int = None,
+                                    max_tokens: int = None, system_prompt: str = None) -> Generator[str, None, None]:
+        """Generate response with streaming output - yields tokens as they're generated"""
+        start_time = time.perf_counter()
+        
+        # Retrieve context from UCS if enabled (do this before streaming starts)
+        retrieved_context = None
+        
+        if use_ucs and self.ucs_enabled:
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                use_full_loop = not config.ucs_fast_retrieval
+                retrieved_context, _ = loop.run_until_complete(
+                    self._retrieve_context_from_ucs(user_input, use_full_cognitive_loop=use_full_loop)
+                )
+                loop.close()
+                if retrieved_context:
+                    logger.info(f"📚 Retrieved context for streaming response")
+            except Exception as e:
+                logger.warning(f"UCS retrieval error: {e}")
+        
+        # Select generation config
+        config_idx = self._select_generation_config(user_input)
+        gen_config = self.generation_configs[config_idx].copy()
+        
+        # Override with custom parameters if provided
+        if temperature is not None:
+            gen_config['temperature'] = temperature
+        if top_p is not None:
+            gen_config['top_p'] = top_p
+        if top_k is not None:
+            gen_config['top_k'] = top_k
+        if max_tokens is not None:
+            gen_config['max_new_tokens'] = max_tokens
+        
+        try:
+            # Use provided system prompt or default
+            if system_prompt is None or not system_prompt.strip():
+                if self.chat_handler and self.chat_handler.model_family == 'phi':
+                    system_prompt = (
+                        "You are a helpful AI assistant. Answer questions directly and concisely. "
+                        "Focus on providing accurate, relevant information. "
+                        "Do not ramble or go off-topic."
+                    )
+                else:
+                    system_prompt = (
+                        "You are a helpful assistant engaged in natural conversation. "
+                        "Use any retrieved context naturally without explicitly mentioning it. "
+                        "Stay conversational, witty, and emotionally intelligent."
+                    )
+            
+            # Format prompt
+            formatted_input = self.chat_handler.format_prompt(
+                user_input, 
+                system_prompt,
+                retrieved_context,
+                show_reasoning
+            )
+            
+            # Tokenize input
+            inputs = self.tokenizer(
+                formatted_input,
+                return_tensors="pt",
+                truncation=True,
+                max_length=2048
+            ).to(self.model.device if hasattr(self.model, 'device') else DEVICE)
+            
+            input_length = inputs.input_ids.shape[1]
+            
+            # Create streamer
+            streamer = TextIteratorStreamer(
+                self.tokenizer, 
+                skip_prompt=True, 
+                skip_special_tokens=True,
+                timeout=60.0
+            )
+            
+            # Get stop token IDs
+            stop_token_ids = self.chat_handler.get_stop_token_ids()
+            
+            # Generation kwargs
+            generation_kwargs = {
+                **inputs,
+                **{k: v for k, v in gen_config.items() if k != 'name'},
+                'pad_token_id': self.tokenizer.pad_token_id,
+                'eos_token_id': stop_token_ids,
+                'use_cache': True,
+                'streamer': streamer,
+            }
+            
+            # Start generation in a separate thread
+            generation_thread = threading.Thread(
+                target=self.model.generate,
+                kwargs=generation_kwargs
+            )
+            generation_thread.start()
+            
+            # Stream the output
+            generated_text = ""
+            for new_text in streamer:
+                generated_text += new_text
+                
+                # Check for stop strings and truncate if found
+                should_stop = False
+                for stop_str in self.chat_handler.stop_strings:
+                    if stop_str in generated_text:
+                        generated_text = generated_text.split(stop_str)[0]
+                        should_stop = True
+                        break
+                
+                yield generated_text
+                
+                if should_stop:
+                    break
+            
+            generation_thread.join(timeout=5.0)
+            
+            # Final cleanup using extract_response
+            final_response = self.chat_handler.extract_response(generated_text, show_reasoning)
+            
+            # Store in UCS memory
+            if use_ucs and self.ucs_enabled and final_response:
+                self._store_conversation_in_ucs(user_input, final_response)
+                self._auto_save_ucs()
+            
+            # Update stats
+            duration = time.perf_counter() - start_time
+            method = f"streaming_{gen_config['name']}"
+            self.performance_monitor.log_response_time(duration, method)
+            self.stats['total_responses'] += 1
+            self.stats['method_counts'][method] = self.stats['method_counts'].get(method, 0) + 1
+            
+            # Yield the final cleaned response
+            yield final_response
+            
+        except Exception as e:
+            logger.error(f"Streaming generation error: {e}")
+            import traceback
+            traceback.print_exc()
+            self.stats['error_count'] += 1
+            yield f"⚠️ Error: {str(e)[:100]}"
+    
+    def chat_response_streaming(self, user_input: str, history: List, enable_tts: bool, 
+                                voice: str, speed: float, show_reasoning: bool = False,
+                                use_ucs: bool = True, temperature: float = None,
+                                top_p: float = None, top_k: int = None,
+                                max_tokens: int = None, system_prompt: str = None):
+        """Streaming chat response - yields (history, input_text, audio) tuples"""
+        if not user_input.strip():
+            yield history, "", None
+            return
+        
+        # Add user message to history immediately
+        history = history + [[user_input, ""]]
+        
+        # Stream the response
+        final_response = ""
+        for partial_response in self.generate_response_streaming(
+            user_input, show_reasoning, use_ucs,
+            temperature, top_p, top_k, max_tokens, system_prompt
+        ):
+            final_response = partial_response
+            # Update the last message in history with partial response
+            history[-1][1] = partial_response
+            yield history, "", None
+        
+        # Generate TTS for the final response (after streaming completes)
+        audio_file = None
+        if enable_tts and self.tts_processor and final_response:
+            try:
+                tts_text = re.sub(r'💭.*?\*\*Answer:\*\*\n', '', final_response, flags=re.DOTALL)
+                tts_text = tts_text[:config.tts_max_length]
+                if tts_text:
+                    tts_future = self.tts_processor.generate_async(tts_text, voice, speed)
+                    audio_file = tts_future.result(timeout=120.0)
+            except Exception as tts_error:
+                logger.warning(f"TTS error: {tts_error}")
+        
+        # Final yield with audio
+        yield history, "", audio_file
+    
     async def chat_response_parallel(self, user_input: str, history: List, enable_tts: bool, 
                              voice: str, speed: float, show_reasoning: bool = False,
                              use_ucs: bool = True, temperature: float = None,
@@ -1761,21 +1945,23 @@ def record_and_transcribe(audio_file_path: str) -> str:
     """Transcribe uploaded audio"""
     return chatbot.transcribe_voice_input(audio_file_path)
 
-async def process_voice_to_chat(audio_file_path: str, history: List, enable_tts: bool, 
-                                voice: str, speed: float, show_reasoning: bool,
-                                use_ucs: bool, system_prompt: str,
-                                temperature: float, top_p: float, top_k: int, max_tokens: int):
-    """Process voice input and generate response"""
+def process_voice_to_chat_streaming(audio_file_path: str, history: List, enable_tts: bool, 
+                                    voice: str, speed: float, show_reasoning: bool,
+                                    use_ucs: bool, system_prompt: str,
+                                    temperature: float, top_p: float, top_k: int, max_tokens: int):
+    """Process voice input and generate streaming response"""
     transcribed_text = chatbot.transcribe_voice_input(audio_file_path)
     
     if transcribed_text.startswith("❌"):
         history.append(["[Voice Input Error]", transcribed_text])
-        return history, "", None
+        yield history, "", None
+        return
     
-    return await chatbot.chat_response_parallel(
+    for update in chatbot.chat_response_streaming(
         transcribed_text, history, enable_tts, voice, speed,
         show_reasoning, use_ucs, temperature, top_p, int(top_k), int(max_tokens), system_prompt
-    )
+    ):
+        yield update
 
 def shutdown_server():
     """Shutdown the server"""
@@ -1877,6 +2063,8 @@ def create_gradio_interface():
                 with gr.Accordion("🧠 UCS & Debug", open=False):
                     use_ucs_checkbox = gr.Checkbox(label="Enable UCS", value=config.use_ucs and HAS_NUMPY)
                     show_reasoning_checkbox = gr.Checkbox(label="Show Reasoning", value=False)
+                    enable_streaming_checkbox = gr.Checkbox(label="Enable Streaming", value=True, 
+                                                            info="Stream text as it's generated")
                     
                     with gr.Row():
                         save_memory_btn = gr.Button("💾 Save Memory")
@@ -1897,24 +2085,41 @@ def create_gradio_interface():
             gr.Markdown("""
 ### Tips for best results:
 - **Model Agnostic**: Works with Gemma, Llama, Mistral, Qwen, Phi, and more!
+- **Streaming**: Enable "Enable Streaming" to see text appear in real-time as it's generated
 - Enable "Enable UCS" for memory-augmented responses
 - Ask about previous conversations - UCS remembers!
-- Enable "Show Reasoning" to see thought process
+- Enable "Show Reasoning" to see thought process (for reasoning models like DeepSeek)
 - Try different presets for varied response styles
 - Custom system prompts allow full control
 - UCS auto-saves memory every 5 minutes
 - TTS now handles longer responses with line breaks
             """)
 
-        # Event handlers
-        async def handle_chat(user_input_text, history, enable_tts_val, voice_val, 
-                            speed_val, show_reasoning_val, use_ucs_val,
-                            system_prompt_val, temp_val, top_p_val, top_k_val, max_tokens_val):
-            return await chatbot.chat_response_parallel(
-                user_input_text, history, enable_tts_val, voice_val, 
-                speed_val, show_reasoning_val, use_ucs_val,
-                temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val
-            )
+        # Event handlers - supporting both streaming and non-streaming modes
+        def handle_chat_streaming(user_input_text, history, enable_tts_val, voice_val, 
+                                  speed_val, show_reasoning_val, use_ucs_val,
+                                  system_prompt_val, temp_val, top_p_val, top_k_val, max_tokens_val,
+                                  enable_streaming_val):
+            """Chat handler - uses streaming or non-streaming based on toggle"""
+            if enable_streaming_val:
+                # Streaming mode - yield updates as tokens are generated
+                for update in chatbot.chat_response_streaming(
+                    user_input_text, history, enable_tts_val, voice_val, 
+                    speed_val, show_reasoning_val, use_ucs_val,
+                    temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val
+                ):
+                    yield update
+            else:
+                # Non-streaming mode - wait for complete response
+                import asyncio
+                loop = asyncio.new_event_loop()
+                result = loop.run_until_complete(chatbot.chat_response_parallel(
+                    user_input_text, history, enable_tts_val, voice_val, 
+                    speed_val, show_reasoning_val, use_ucs_val,
+                    temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val
+                ))
+                loop.close()
+                yield result
         
         def apply_system_prompt_preset(preset_name):
             """Apply system prompt presets"""
@@ -1957,20 +2162,22 @@ def create_gradio_interface():
             result = chatbot.clear_ucs_memory()
             return result, chatbot.get_comprehensive_stats()
 
-        # Wire up events
+        # Wire up events - using streaming for real-time text output
         send_btn.click(
-            fn=handle_chat,
+            fn=handle_chat_streaming,
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
-                   system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider],
+                   system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
+                   enable_streaming_checkbox],
             outputs=[chatbot_interface, user_input, audio_output]
         )
 
         user_input.submit(
-            fn=handle_chat,
+            fn=handle_chat_streaming,
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
-                   system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider],
+                   system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
+                   enable_streaming_checkbox],
             outputs=[chatbot_interface, user_input, audio_output]
         )
         
@@ -2020,7 +2227,7 @@ def create_gradio_interface():
         )
 
         voice_to_chat_btn.click(
-            fn=process_voice_to_chat,
+            fn=process_voice_to_chat_streaming,
             inputs=[audio_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider],
