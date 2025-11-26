@@ -1908,10 +1908,34 @@ class UCSEnhancedChatBot:
             return "❌ UCS not available"
         
         try:
-            self.ucs._ensure_memory()
+            # Actually clear the memory data structures
+            if self.ucs.vmem:
+                # Clear embeddings
+                self.ucs.vmem.embeddings = {}
+                # Clear mementos
+                self.ucs.vmem.mementos = {}
+                # Clear any caches
+                if hasattr(self.ucs.vmem, '_cache'):
+                    self.ucs.vmem._cache = {}
+                if hasattr(self.ucs.vmem, '_query_cache'):
+                    self.ucs.vmem._query_cache = {}
+                # Reset the index if using advanced search
+                if self.ucs.vmem.use_advanced_search:
+                    if hasattr(self.ucs.vmem, '_index'):
+                        self.ucs.vmem._index = None
+                    if hasattr(self.ucs.vmem, '_indexed_ids'):
+                        self.ucs.vmem._indexed_ids = set()
+            
+            # Reset stats
             self.stats['ucs_retrievals'] = 0
             self.stats['ucs_expert_calls'] = 0
-            return "✅ UCS memory cleared"
+            
+            # Also delete the saved file if it exists
+            if os.path.exists(config.ucs_save_path):
+                os.remove(config.ucs_save_path)
+                logger.info(f"🗑️ Deleted saved memory file: {config.ucs_save_path}")
+            
+            return "✅ UCS memory cleared (0 mementos)"
         except Exception as e:
             return f"❌ Clear failed: {e}"
     
