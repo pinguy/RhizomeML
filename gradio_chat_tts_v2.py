@@ -1755,6 +1755,7 @@ def create_gradio_interface():
                             "Analytical Thinker",
                             "Concise & Direct",
                             "Socratic Teacher",
+                            "Fast (No Thinking)",
                             "Custom"
                         ],
                         value="Default (Conversational)",
@@ -1828,6 +1829,7 @@ def create_gradio_interface():
                 "Analytical Thinker": "You are an analytical assistant who breaks down complex problems systematically. Provide structured reasoning, consider multiple perspectives, and use logic-driven analysis. Show your thought process step-by-step.",
                 "Concise & Direct": "You are a concise assistant who gets straight to the point. Provide brief, clear, and actionable responses. Avoid unnecessary elaboration while maintaining accuracy.",
                 "Socratic Teacher": "You are a Socratic teacher who guides learning through thoughtful questions. Help users discover answers themselves by asking probing questions, encouraging critical thinking, and building understanding progressively.",
+                "Fast (No Thinking)": "Respond immediately and directly. Do NOT use <think> tags or internal reasoning blocks. Do NOT show your thought process. Just answer the question concisely and naturally. No preamble, no analysis, just the answer.",
                 "Custom": ""
             }
             return prompts.get(preset_name, prompts["Default (Conversational)"])
