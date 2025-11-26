@@ -5,6 +5,9 @@ for memory-augmented, expert-guided conversations.
 
 This version automatically detects and uses the model's native chat template,
 making it compatible with any instruction-tuned model (Gemma, Llama, Mistral, Qwen, etc.)
+
+checkpoint_path = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+checkpoint_path = self._find_latest_checkpoint(config.base_dir)
 """
 
 import torch
@@ -535,12 +538,21 @@ class ChatTemplateHandler:
             'assistant_role': 'assistant',
             'supports_system': True,
         },
-        'phi': {
-            'start_turn': '<|user|>',
-            'end_turn': '<|end|>',
-            'user_role': '',
-            'assistant_role': '',
+        'deepseek': {  # DeepSeek R1 and distillations
+            'start_turn': '<|im_start|>',
+            'end_turn': '<|im_end|>',
+            'user_role': 'user',
+            'assistant_role': 'assistant',
             'supports_system': True,
+            'supports_thinking': True,  # Has <think> blocks
+        },
+        'phi': {
+            'start_turn': '<|',
+            'end_turn': '<|end|>',
+            'user_role': 'user',
+            'assistant_role': 'assistant',
+            'supports_system': False,  # Phi models often ignore system role - embed in user message
+            'system_role': 'system',
         },
         'chatml': {  # Generic ChatML (used by many models)
             'start_turn': '<|im_start|>',
@@ -604,8 +616,10 @@ class ChatTemplateHandler:
         # First, check adapter_config.json for the real base model
         name_or_path = self._get_base_model_name().lower()
         
-        # Check for specific model families
-        if 'gemma' in name_or_path:
+        # Check for specific model families (order matters - check more specific first)
+        if 'deepseek' in name_or_path:
+            return 'deepseek'
+        elif 'gemma' in name_or_path:
             return 'gemma'
         elif 'llama' in name_or_path or 'meta-llama' in name_or_path:
             return 'llama'
@@ -665,8 +679,12 @@ class ChatTemplateHandler:
             stop_strings.extend(['<|eot_id|>', '<|start_header_id|>'])
         elif self.model_family == 'chatml' or self.model_family == 'qwen':
             stop_strings.extend(['<|im_end|>', '<|im_start|>'])
+        elif self.model_family == 'deepseek':
+            stop_strings.extend(['<|im_end|>', '<|im_start|>'])
         elif self.model_family == 'mistral':
             stop_strings.extend(['</s>', '[INST]'])
+        elif self.model_family == 'phi':
+            stop_strings.extend(['<|end|>', '<|user|>', '<|endoftext|>'])
         
         return list(set(stop_strings))  # Remove duplicates
     
@@ -690,10 +708,17 @@ class ChatTemplateHandler:
         return list(set(stop_ids))  # Remove duplicates
     
     def format_prompt(self, user_input: str, system_prompt: Optional[str] = None,
-                      retrieved_context: Optional[str] = None) -> str:
+                      retrieved_context: Optional[str] = None,
+                      show_reasoning: bool = True) -> str:
         """
         Format the prompt using the model's native chat template.
         Falls back to manual formatting if no template is available.
+        
+        Args:
+            user_input: The user's message
+            system_prompt: Optional system prompt
+            retrieved_context: Optional context from memory retrieval
+            show_reasoning: If False and model supports thinking, adds instruction to skip <think> blocks
         """
         # Build messages list
         messages = []
@@ -704,13 +729,24 @@ class ChatTemplateHandler:
         patterns = self.MODEL_PATTERNS.get(self.model_family, self.MODEL_PATTERNS['chatml'])
         
         # Handle system prompt
-        if system_prompt:
+        effective_system_prompt = system_prompt or ""
+        
+        # For thinking models (like DeepSeek), add instruction to skip thinking when disabled
+        if not show_reasoning and patterns.get('supports_thinking', False):
+            no_think_instruction = "\n\nIMPORTANT: Do NOT use <think> tags or show internal reasoning. Respond directly and concisely."
+            effective_system_prompt = effective_system_prompt + no_think_instruction if effective_system_prompt else no_think_instruction.strip()
+        
+        if effective_system_prompt:
             if patterns.get('supports_system', True) and self.has_chat_template:
                 # Model supports system role - add as separate message
-                messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "system", "content": effective_system_prompt})
             else:
-                # Embed system prompt in user content
-                user_content += f"[System: {system_prompt}]\n\n"
+                # Embed system prompt in user content - use clear instruction format
+                if self.model_family == 'phi':
+                    # Phi models need very explicit instruction formatting
+                    user_content += f"Instructions: {effective_system_prompt}\n\nQuestion: "
+                else:
+                    user_content += f"[System: {effective_system_prompt}]\n\n"
         
         # Add retrieved context
         if retrieved_context:
@@ -720,7 +756,16 @@ class ChatTemplateHandler:
         messages.append({"role": "user", "content": user_content})
         
         # Try to use the tokenizer's chat template
-        if self.has_chat_template:
+        # Note: Phi models often have broken chat templates, so we force manual format
+        use_native_template = self.has_chat_template
+        
+        if self.model_family == 'phi':
+            # Phi models frequently have issues with system prompts in their chat templates
+            # Force manual format for more reliable behavior
+            logger.debug("Phi model detected - using manual format for reliability")
+            use_native_template = False
+        
+        if use_native_template:
             try:
                 formatted = self.tokenizer.apply_chat_template(
                     messages,
@@ -766,10 +811,15 @@ class ChatTemplateHandler:
                 formatted += f"<|im_start|>{role}\n{content}<|im_end|>\n"
             
             elif self.model_family == 'phi':
+                # Phi models work best without system blocks - system is embedded in user message
+                # Format: <|user|>\ncontent<|end|>\n<|assistant|>\nresponse<|end|>\n
                 if role == 'system':
-                    formatted += f"<|system|>\n{content}<|end|>\n"
+                    # Skip - system prompt is already embedded in user content
+                    continue
                 elif role == 'user':
                     formatted += f"<|user|>\n{content}<|end|>\n"
+                elif role == 'assistant':
+                    formatted += f"<|assistant|>\n{content}<|end|>\n"
             
             else:
                 # Generic fallback
@@ -817,14 +867,20 @@ class ChatTemplateHandler:
             response = re.sub(r'<\|im_start\|>.*', '', response, flags=re.DOTALL)
             response = re.sub(r'<\|im_end\|>', '', response)
         
+        elif self.model_family == 'deepseek':
+            response = re.sub(r'<\|im_start\|>.*', '', response, flags=re.DOTALL)
+            response = re.sub(r'<\|im_end\|>', '', response)
+        
         elif self.model_family == 'mistral':
             response = re.sub(r'\[INST\].*', '', response, flags=re.DOTALL)
             response = re.sub(r'\[/INST\]', '', response)
         
         elif self.model_family == 'phi':
             response = re.sub(r'<\|user\|>.*', '', response, flags=re.DOTALL)
+            response = re.sub(r'<\|system\|>.*?<\|end\|>', '', response, flags=re.DOTALL)
             response = re.sub(r'<\|end\|>', '', response)
             response = re.sub(r'<\|assistant\|>', '', response)
+            response = re.sub(r'<\|endoftext\|>', '', response)
         
         # Handle thinking blocks (common in reasoning models)
         if "<think>" in response and "</think>" in response:
@@ -843,6 +899,33 @@ class ChatTemplateHandler:
         response = re.sub(r'\n(User|Assistant|model|user|human|Human|AI|ai):\s*.*$', '', response, flags=re.IGNORECASE | re.MULTILINE)
         response = re.sub(r'\n{3,}', '\n\n', response)
         response = re.sub(r' {2,}', ' ', response)
+        
+        # Phi-specific cleanup: detect and truncate off-topic rambling
+        if self.model_family == 'phi':
+            # Look for signs of rambling/going off-topic
+            rambling_patterns = [
+                r'\bIn conclusion\b.*$',  # Often signals the model is wrapping up a tangent
+                r'\bAs they continue\b.*$',  # Common Phi rambling pattern
+                r'\bThis helps to deepen\b.*$',
+                r'\bBy using appropriate\b.*$',
+                r'\bWhether it\'s a\b.*$',
+                r'\bSo let us\b.*$',
+                r'\n\n[A-Z][^.!?]*?(education|entertainment|professional|communication|learning|understanding).*$',
+            ]
+            for pattern in rambling_patterns:
+                response = re.sub(pattern, '', response, flags=re.IGNORECASE | re.DOTALL)
+            
+            # If response is very long and contains multiple paragraphs after the actual answer,
+            # try to truncate at a reasonable point
+            if len(response) > 500:
+                # For multiple choice questions, try to find the answer and stop there
+                mc_match = re.search(r'^.*?\b([A-F])\.\s*[^\n]+', response, re.MULTILINE)
+                if mc_match:
+                    # Check if there's a lot more text after the answer
+                    answer_end = mc_match.end()
+                    remaining = response[answer_end:].strip()
+                    if len(remaining) > 200:  # Likely rambling
+                        response = response[:answer_end].strip()
         
         return response.strip()
 
@@ -907,7 +990,7 @@ class UCSEnhancedChatBot:
                 'temperature': 0.7,
                 'top_p': 0.85,
                 'top_k': 40,
-                'repetition_penalty': 1.15,
+                'repetition_penalty': 1.2,  # Higher penalty to reduce rambling
             }
         ]
     
@@ -1373,17 +1456,26 @@ class UCSEnhancedChatBot:
         try:
             # Use provided system prompt or default
             if system_prompt is None or not system_prompt.strip():
-                system_prompt = (
-                    "You are a helpful assistant engaged in natural conversation. "
-                    "Use any retrieved context naturally without explicitly mentioning it. "
-                    "Stay conversational, witty, and emotionally intelligent."
-                )
+                # Phi models need more direct instructions
+                if self.chat_handler and self.chat_handler.model_family == 'phi':
+                    system_prompt = (
+                        "You are a helpful AI assistant. Answer questions directly and concisely. "
+                        "Focus on providing accurate, relevant information. "
+                        "Do not ramble or go off-topic."
+                    )
+                else:
+                    system_prompt = (
+                        "You are a helpful assistant engaged in natural conversation. "
+                        "Use any retrieved context naturally without explicitly mentioning it. "
+                        "Stay conversational, witty, and emotionally intelligent."
+                    )
             
             # USE MODEL-AGNOSTIC CHAT HANDLER
             formatted_input = self.chat_handler.format_prompt(
                 user_input, 
                 system_prompt,
-                retrieved_context
+                retrieved_context,
+                show_reasoning  # Pass through to control thinking blocks
             )
             
             with torch_inference_mode():
@@ -1449,6 +1541,10 @@ class UCSEnhancedChatBot:
         """Select appropriate generation config"""
         normalized_input = user_input.lower()
         input_length = len(user_input.split())
+        
+        # Phi models work better with focused/constrained generation
+        if self.chat_handler and self.chat_handler.model_family == 'phi':
+            return 2  # Always use focused for Phi to reduce rambling
         
         if any(word in normalized_input for word in ['why', 'how', 'explain', 'analyze', 'compare', 'what if']):
             return 1  # creative
