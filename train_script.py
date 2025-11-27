@@ -401,32 +401,17 @@ def get_model_lora_targets(model):
     
     # Define target patterns for different architectures
     target_patterns = {
-        # GPT-2 style models
         'gpt2': ["c_attn", "c_proj", "c_fc"],
         'gpt': ["c_attn", "c_proj", "c_fc"],
-        
-        # BERT/RoBERta style models  
         'bert': ["query", "key", "value", "dense"],
         'roberta': ["query", "key", "value", "dense"],
-        
-        # LLaMA style models
         'llama': ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        
-        # Mistral style models
         'mistral': ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        
-        # Qwen style models (like DeepSeek-R1-Distill-Qwen)
         'qwen': ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         'qwen2': ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        
-        # T5 style models
         't5': ["q", "k", "v", "o", "wi", "wo"],
-        
-        # Falcon style models
         'falcon': ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"],
-        
-        # Default fallback patterns
-        'default': ["q_proj", "k_proj", "v_proj", "o_proj"]
+        'default': ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     }
     
     # Determine which pattern to use
@@ -450,7 +435,7 @@ def get_model_lora_targets(model):
         found_targets = []
         
         # Look for common attention projection patterns
-        attention_patterns = ['q_proj', 'k_proj', 'v_proj', 'query', 'key', 'value', 'c_attn']
+        attention_patterns = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'query', 'key', 'value', 'c_attn']
         for pattern in attention_patterns:
             for module_type, module_names in all_modules.items():
                 if 'Linear' in module_type:  # Focus on Linear layers
