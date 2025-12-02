@@ -87,7 +87,7 @@ class Config:
     auto_open_browser: bool = True
     max_cache_size: int = 100
     max_response_length: int = 512
-    tts_max_length: int = 2000  # ~120 seconds of TTS
+    tts_max_length: int = 3500  # ~210 seconds of TTS
     memory_cleanup_threshold: float = 0.6
     show_reasoning: bool = False
     use_system_prompt: bool = False
