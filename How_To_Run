@@ -2,8 +2,4 @@ python3 pdf_to_json.py
 python3 batch_embedder.py
 python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid # got a GPU remove --force-cpu
 python3 train_script.py
-
-# Both alpha/beta stage but do work for the most part. V2 has more features 
-
 python3 gradio_chat_tts.py
-python3 gradio_chat_tts_v2.py
