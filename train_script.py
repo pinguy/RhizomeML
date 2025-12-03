@@ -485,7 +485,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+        model_name: The model name or path (e.g., "google/gemma-3-1b-it-qat-int4-unquantized")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -1331,7 +1331,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"):
+    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -1941,7 +1941,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
     
     try:
         # Call the main training function with desired parameters
