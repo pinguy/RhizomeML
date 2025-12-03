@@ -38,6 +38,16 @@ from datetime import datetime
 from collections import Counter, defaultdict
 from torch.utils.data import WeightedRandomSampler
 
+# DeepSpeed integration for large model training
+from deepspeed_integration import (
+    add_deepspeed_to_training_args,
+    get_deepspeed_config_for_system,
+    estimate_max_model_size,
+    OFFLOAD_AVAILABLE,
+    DEEPSPEED_AVAILABLE,
+    ACCELERATE_AVAILABLE,
+)
+
 # Add safe globals for numpy reconstruct (fix deprecation warning)
 import torch.serialization
 try:
@@ -109,6 +119,7 @@ DEVICE_INFO = "Not initialized"
 DEVICE_DETAILS = {}
 USE_CPU_ONLY = False
 USE_QLORA = False  # Will be set based on device
+USE_DEEPSPEED = False  # Will be set based on GPU + DeepSpeed availability
 
 def get_system_memory_info():
     """Get system memory information"""
@@ -319,6 +330,28 @@ def detect_optimal_device():
                 device_info_str = f"GPU: {gpu_info.get('name', 'Unknown')} ({gpu_info.get('memory_total', 0):.1f}GB)"
                 all_info['decision_reason'] = "GPU available and working"
                 logger.info(f"🚀 GPU is ready! Will use CUDA with QLoRA (4-bit) for training.")
+
+                # Check if DeepSpeed is available for large model support
+                if DEEPSPEED_AVAILABLE and ACCELERATE_AVAILABLE:
+                    global USE_DEEPSPEED
+                    USE_DEEPSPEED = True
+                    logger.info(f"🔥 DeepSpeed ZeRO-Offload available! Large models now possible.")
+                    all_info['deepspeed_available'] = True
+                    
+                    # Estimate max trainable model size
+                    max_size = estimate_max_model_size(
+                        vram_gb=gpu_info.get('memory_total', 6.0),
+                        ram_gb=get_system_memory_info()['total_gb'],
+                        use_quantization=True,
+                        use_offload=True,
+                    )
+                    all_info['max_model_size_b'] = max_size
+                    logger.info(f"📏 Estimated max model size: {max_size:.1f}B parameters")
+                else:
+                    all_info['deepspeed_available'] = False
+                    logger.info(f"ℹ️ DeepSpeed not available. Install for larger model support:")
+                    logger.info(f"   pip install deepspeed accelerate")
+
     else:
         device_info_str = f"CPU: {cpu_count} cores (CUDA not available)"
         all_info['decision_reason'] = "CUDA not available"
@@ -1347,6 +1380,7 @@ class RhizomeTrainer:
         print("🤖 RhizomeML Fine-Tuning Suite")
         print("   🎨 Now with Semantic Theme-Aware Training!")
         print("   ⚡ CPU-Optimized with QLoRA 4-bit Support!")
+        print("   🔥 DeepSpeed ZeRO-Offload Enabled!")
         print("   Compatible with data_formatter.py output")
         print("═" * 70)
         
@@ -1611,7 +1645,10 @@ class RhizomeTrainer:
         return tokenized_dataset
     
     def create_training_args(self, output_dir="./RhizomeML-finetuned", 
-                            has_validation=False, **kwargs):
+                            has_validation=False,
+                            use_deepspeed=True,    # NEW PARAMETER
+                            model_size_b=1.0,      # NEW PARAMETER
+                            **kwargs):
         """
         Creates and configures TrainingArguments for the Hugging Face Trainer.
         """
@@ -1673,6 +1710,23 @@ class RhizomeTrainer:
         # Override defaults with user-provided arguments
         default_args.update(kwargs)
         
+        # DeepSpeed ZeRO-Offload integration
+        if use_deepspeed and USE_DEEPSPEED and not USE_CPU_ONLY:
+            vram_gb = DEVICE_DETAILS.get('memory_total', 6.0)
+            ram_gb = DEVICE_DETAILS.get('ram_total_gb', 32.0)
+            
+            logger.info("🔥 Enabling DeepSpeed ZeRO-Offload...")
+            
+            default_args = add_deepspeed_to_training_args(
+                training_args_dict=default_args,
+                output_dir=output_dir,
+                model_size_b=model_size_b,
+                vram_gb=vram_gb,
+                ram_gb=ram_gb,
+            )
+        elif use_deepspeed and not USE_DEEPSPEED:
+            logger.info("ℹ️ DeepSpeed requested but not available. Using standard training.")
+
         # Handle potential arg name changes (evaluation_strategy vs eval_strategy)
         # The user's error indicates it expects 'eval_strategy'.
         # If 'evaluation_strategy' was passed in kwargs, rename it.
@@ -1687,7 +1741,10 @@ class RhizomeTrainer:
         return TrainingArguments(**default_args)
     
     def train(self, train_file, val_file=None, output_dir="./RhizomeML-finetuned", 
-              use_theme_weighting=True, use_sequence_packing=True, use_cache=True, **training_kwargs):
+              use_theme_weighting=True, use_sequence_packing=True, use_cache=True, 
+              use_deepspeed=True,     # NEW PARAMETER
+              model_size_b=None,      # NEW PARAMETER (auto-detect if None)
+              **training_kwargs):
         """
         Main function to orchestrate the fine-tuning process.
         
@@ -1698,6 +1755,8 @@ class RhizomeTrainer:
             use_theme_weighting: Enable theme-weighted sampling for balanced training
             use_sequence_packing: Pack short sequences together (CPU optimization)
             use_cache: Cache tokenized dataset for faster subsequent runs
+            use_deepspeed: Enable DeepSpeed ZeRO-Offload if available
+            model_size_b: Size of model in billions of params (for memory estimation)
             **training_kwargs: Additional training arguments
         """
         self.print_header()
@@ -1725,9 +1784,17 @@ class RhizomeTrainer:
             else:
                 logger.info("DataLoader num_workers is 0, worker_init_fn not applied.")
 
+            # Auto-detect model size if not provided
+            if model_size_b is None:
+                total_params = sum(p.numel() for p in self.model.parameters())
+                model_size_b = total_params / 1e9
+                logger.info(f"📊 Auto-detected model size: {model_size_b:.2f}B parameters")
+            
             training_args = self.create_training_args(
                 output_dir=output_dir,
                 has_validation=has_validation,
+                use_deepspeed=use_deepspeed,
+                model_size_b=model_size_b,
                 **training_kwargs
             )
             
@@ -1742,6 +1809,7 @@ class RhizomeTrainer:
             logger.info(f"💡 Gradient Checkpointing: {training_args.gradient_checkpointing}")
             logger.info(f"🚫 CPU-only mode: {training_args.use_cpu}")
             logger.info(f"🔬 QLoRA 4-bit: {USE_QLORA}")
+            logger.info(f"⚡ DeepSpeed ZeRO-Offload: {USE_DEEPSPEED and use_deepspeed}")
             
             # Display CPU optimizations
             if USE_CPU_ONLY:
@@ -1952,8 +2020,12 @@ def main():
             
             # NEW: Semantic and CPU optimization features
             use_theme_weighting=True,      # Theme-aware sampling
-            use_sequence_packing=True,    # CPU optimization (20-40% boost)
+            use_sequence_packing=True,     # CPU optimization (20-40% boost)
             use_cache=True,                # Cache tokenized dataset
+            
+            # NEW: DeepSpeed ZeRO-Offload
+            use_deepspeed=True,            # Enable DeepSpeed ZeRO-Offload
+            model_size_b=None,             # Auto-detect, or set explicitly (e.g., 7.0 for 7B)
             
             # Training parameters (auto-adjusted for CPU/GPU)
             num_train_epochs=3,
@@ -1979,6 +2051,8 @@ def main():
                 print("⚡ CPU optimizations were applied for maximum performance")
             if USE_QLORA:
                 print("🔬 Model was trained with QLoRA 4-bit quantization")
+            if USE_DEEPSPEED:
+                print("🔥 DeepSpeed ZeRO-Offload was used for memory efficiency")
             print("═" * 70)
         else:
             print("\n" + "═" * 70)
