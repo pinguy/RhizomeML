@@ -6,13 +6,11 @@ for memory-augmented, expert-guided conversations.
 This version automatically detects and uses the model's native chat template,
 making it compatible with any instruction-tuned model (Gemma, Llama, Mistral, Qwen, etc.)
 
-checkpoint_path = "google/gemma-3-4b-it-qat-int4-unquantized"
-
 Replace:
 
 checkpoint_path = self._find_latest_checkpoint(config.base_dir)
 
-With something like this to run the model directly from HF
+With something like this to run the model directly from HF instead of the FT version.
 
 checkpoint_path = "google/gemma-3-4b-it-qat-int4-unquantized"
 
