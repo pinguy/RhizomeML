@@ -19,13 +19,16 @@ Usage:
 
 Requirements:
     pip install torch transformers peft accelerate sentencepiece
-
-Issues? Run:
-    sudo python3 -m pip uninstall -y triton
 """
 
 import os
 import sys
+
+# Disable torch compile/dynamo which pulls in triton
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
+os.environ["TORCHDYNAMO_DISABLE"] = "1" 
+os.environ["PYTORCH_DISABLE_FLASH_ATTENTION"] = "1"
+
 import argparse
 import subprocess
 import shutil
