@@ -46,7 +46,7 @@ distrobox enter rhizome-dev
 # (Just run the commands below in your terminal)
 
 # Clone and setup
-git clone https://github.com/yourusername/RhizomeML.git
+git clone https://github.com/pinguy/RhizomeML.git
 cd RhizomeML
 
 # Install dependencies
