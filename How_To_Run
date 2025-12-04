@@ -4,5 +4,5 @@ python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode
 python3 train_script.py
 python3 gradio_chat_tts.py
 
-# Once happy can be turned into a gguf for llama
+# Once happy can be turned into a GGUF for llama
 python3 convert_to_gguf.py
