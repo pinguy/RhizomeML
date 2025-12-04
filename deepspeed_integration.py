@@ -17,8 +17,6 @@ Usage:
         DEEPSPEED_AVAILABLE,
     )
 
-Author: RhizomeML Pipeline
-License: MIT
 """
 
 import os
