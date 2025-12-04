@@ -12,27 +12,16 @@ This script:
 5. Auto-clones and builds llama.cpp if needed
 
 Usage:
-    python3 convert_to_gguf.py                          # Auto-detect latest checkpoint
-    python3 convert_to_gguf.py --checkpoint checkpoint-2100
-    python3 convert_to_gguf.py --quant q4_k_m           # Specify quantization
-    python3 convert_to_gguf.py --output my_model.gguf   # Custom output name
+    python convert_to_gguf.py                          # Auto-detect latest checkpoint
+    python convert_to_gguf.py --checkpoint checkpoint-2100
+    python convert_to_gguf.py --quant q4_k_m           # Specify quantization
+    python convert_to_gguf.py --output my_model.gguf   # Custom output name
 
 Requirements:
-    pip3 install torch transformers peft accelerate sentencepiece
+    pip install torch transformers peft accelerate sentencepiece
 
 Issues? Run:
     sudo python3 -m pip uninstall -y triton
-
-fails with:
-| ERROR | Failed to build llama-quantize
-
-Run:
-
-cd /RhizomeML/llama.cpp
-cmake -B build -DLLAMA_CURL=OFF
-cmake --build build --target llama-quantize -j$(nproc)
-
-and run script again.
 """
 
 import os
@@ -94,6 +83,9 @@ def get_llama_cpp_bin_dir(llama_cpp_dir: Path) -> Path:
 
 def find_binary(llama_cpp_dir: Path, name: str) -> Optional[Path]:
     """Find a llama.cpp binary, checking CMake build paths first."""
+    # Ensure it's an absolute Path object
+    llama_cpp_dir = Path(llama_cpp_dir).resolve()
+    
     # CMake build locations (preferred)
     cmake_paths = [
         llama_cpp_dir / "build" / "bin" / name,
@@ -110,7 +102,11 @@ def find_binary(llama_cpp_dir: Path, name: str) -> Optional[Path]:
     
     for p in cmake_paths + legacy_paths:
         if p.exists():
+            logger.debug(f"Found binary: {p}")
             return p
+    
+    # Log what we checked if not found
+    logger.debug(f"Binary '{name}' not found. Checked: {cmake_paths[0]}")
     
     return None
 
@@ -204,7 +200,7 @@ def merge_lora_adapters(
         
         base_model_obj = AutoModelForCausalLM.from_pretrained(
             base_model,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map=device,
             trust_remote_code=True,
             low_cpu_mem_usage=True
@@ -215,7 +211,7 @@ def merge_lora_adapters(
         model = PeftModel.from_pretrained(
             base_model_obj,
             checkpoint_path,
-            torch_dtype=torch.float16
+            dtype=torch.float16
         )
         
         logger.info("Merging adapters...")
@@ -286,6 +282,9 @@ def build_llama_cpp(llama_cpp_dir: Path) -> bool:
     logger.info("Building llama.cpp binaries...")
     logger.info("=" * 60)
     
+    # Resolve to absolute path
+    llama_cpp_dir = Path(llama_cpp_dir).resolve()
+    
     if not check_cmake_available():
         logger.error("CMake not found. Please install cmake:")
         logger.error("  Ubuntu/Debian: sudo apt install cmake build-essential")
@@ -343,6 +342,10 @@ def build_llama_cpp(llama_cpp_dir: Path) -> bool:
                 logger.warning(f"Failed to build {target}, continuing...")
         
         # Verify at least llama-quantize exists (llama-server is optional for conversion)
+        expected_path = llama_cpp_dir / "build" / "bin" / "llama-quantize"
+        logger.info(f"Checking for binary at: {expected_path}")
+        logger.info(f"Path exists: {expected_path.exists()}")
+        
         if not find_binary(llama_cpp_dir, "llama-quantize"):
             logger.error("Failed to build llama-quantize")
             return False
