@@ -6,6 +6,7 @@ peft
 sentence-transformers
 bitsandbytes
 deepspeed
+accelerate
 
 # Utility libraries
 numpy
