@@ -7,6 +7,7 @@ sentence-transformers
 bitsandbytes
 deepspeed
 accelerate
+llama-cpp-python
 
 # Utility libraries
 numpy
