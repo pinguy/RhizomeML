@@ -18,9 +18,6 @@ Usage:
 
 Requirements:
     pip install torch transformers peft accelerate sentencepiece
-
-Issues? Run:
-    sudo python3 -m pip uninstall -y triton
 """
 
 import os
