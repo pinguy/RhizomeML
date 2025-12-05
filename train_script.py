@@ -1559,7 +1559,7 @@ class RhizomeTrainer:
             tokenize_function,
             batched=True,
             batch_size=1000,
-            num_proc=0, # Use 1 proc to avoid issues with map and state
+            num_proc=1 if USE_CPU_ONLY else 0,
             remove_columns=original_columns, # <-- FIX 1: Add this line
             desc="Tokenizing"
         )
