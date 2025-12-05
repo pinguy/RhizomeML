@@ -18,10 +18,10 @@ deactivate
 train_script.py
 
 For CPU
-num_proc=0
+num_proc=1
 
 For GPU
-num_proc=1
+num_proc=0
 ```
 ---
 ```
