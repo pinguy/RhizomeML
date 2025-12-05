@@ -13,3 +13,20 @@ pip3 install peft
 python3 convert_to_gguf.py
 deactivate
 ```
+---
+```
+train_script.py
+
+For CPU
+num_proc=0
+
+For GPU
+num_proc=1
+```
+---
+```
+OOM Issues adjust these:
+
+default_batch_size = 2 # Doubles activation memory vs batch=1 but Faster
+default_grad_accum = 8 # Increases the effective batch → more time, not more Increases the effective batch → more time, not more VRAM/RAM
+```
