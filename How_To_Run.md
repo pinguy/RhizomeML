@@ -1,3 +1,4 @@
+```
 pip3 install -r requirements.txt --upgrade
 python3 pdf_to_json.py
 python3 batch_embedder.py # use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
@@ -11,3 +12,4 @@ source venv_gguf/bin/activate
 pip3 install peft
 python3 convert_to_gguf.py
 deactivate
+```
