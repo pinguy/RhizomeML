@@ -118,6 +118,14 @@ except:
     KEYBERT_AVAILABLE = False
     print("⚠️  KeyBERT not available. Install with 'pip install keybert'")
 
+# --- Llama-cpp-python for local LLM ---
+try:
+    from llama_cpp import Llama
+    LLAMA_CPP_AVAILABLE = True
+except ImportError:
+    LLAMA_CPP_AVAILABLE = False
+    print("⚠️  llama-cpp-python not available. Install with 'pip install llama-cpp-python'")
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -232,6 +240,11 @@ class Config:
     
     # --- Splits ---
     split_ratio: Tuple[float, float, float] = (0.8, 0.1, 0.1)
+    
+    # --- LLM for PDF Q&A (New) ---
+    use_llm_for_pdf_qa: bool = False
+    llm_model_path: Optional[str] = None  # Path to .gguf model file
+    num_questions_per_chunk: int = 4
     
     # --- Misc ---
     seed: int = 42
@@ -529,6 +542,7 @@ class IPFSemanticEnhancer:
 class SemanticLabeler:
     """Enhanced labeler with phrase/word separation and incremental TF-IDF"""
     
+    # Keep your fallback list here as a safety net
     FALLBACK_STOPWORDS = {
         'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
         'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
@@ -536,15 +550,28 @@ class SemanticLabeler:
         'would', 'should', 'could', 'may', 'might', 'must', 'can', 'shall',
     }
     
+    # --- DEFINE YOUR CUSTOM NOISE LIST HERE ---
+    CUSTOM_NOISE_WORDS = {
+        'like', 'context', 'system', 'model', 'time', 'found', 'learning', 
+        'would', 'could', 'should', 'think', 'going', 'really', 'something',
+        'actually', 'basically', 'probably', 'maybe', 'using', 'make',
+        'things', 'much', 'well', 'also', 'know', 'want', 'need', 'take',
+        'even', 'still', 'back', 'just', 'good', 'right', 'look', 'see'
+    }
+
     def __init__(self, cfg: Config, embedding_model=None):
         self.cfg = cfg
         self.mode = cfg.semantic_mode
         self.method = cfg.semantic_method
-        self.embedding_model = embedding_model
-        self.discovered = Counter()
+        self.embedding_model = embedding_model  # Added for KeyBERT
         
+        # 1. Load the base stopwords (either NLTK or Fallback)
         self.stopwords = NLTK_STOPWORDS if NLTK_STOPWORDS else self.FALLBACK_STOPWORDS
-        logger.info(f"SemanticLabeler: Using {len(self.stopwords)} stopwords")
+        
+        # 2. FORCE update with your custom noise words
+        self.stopwords.update(self.CUSTOM_NOISE_WORDS)
+        
+        logger.info(f"SemanticLabeler: Using {len(self.stopwords)} stopwords (includes custom noise filters)")
         
         if self.method in ['tfidf', 'hybrid']:
             self.tfidf_words = TfidfVectorizer(
@@ -572,6 +599,7 @@ class SemanticLabeler:
             self._load_memory()
             logger.info(f"🧠 SemanticLabeler: Adaptive mode (Gen {self.memory.generation}, Method: {self.method})")
         else:
+            self.discovered = Counter()  # Added for normal mode
             logger.info(f"📋 SemanticLabeler: Normal mode (Method: {self.method})")
     
     def _load_memory(self):
@@ -1019,16 +1047,80 @@ class QualityScorer:
         return min(score + 0.25, 1.0)
 
 # ============================================================================
-# Q&A BUILDER
+# LOCAL LLM Q&A BUILDER (New class for llama-cpp-python integration)
+# ============================================================================
+
+class LocalLLMQABuilder:
+    """Uses local LLM via llama-cpp-python to generate questions from chunks."""
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        if not LLAMA_CPP_AVAILABLE:
+            raise ImportError("llama-cpp-python is required for LLM-based Q&A generation.")
+        if not self.cfg.llm_model_path:
+            raise ValueError("llm_model_path must be set in Config to use LLM for Q&A.")
+        
+        logger.info(f"Loading LLM model from {self.cfg.llm_model_path}...")
+        self.llm = Llama(
+            self.cfg.llm_model_path,
+            n_gpu_layers=-1 if not self.cfg.force_cpu else 0,  # Use GPU if available
+            n_ctx=2048,  # Context size
+            verbose=True
+        )
+    
+    def generate_questions(self, chunk_text: str, num_questions: int = 4) -> List[str]:
+        questions = []
+        for _ in range(num_questions):
+            prompt = f"""You are a dataset creator. Read this text:
+"{chunk_text[:1000]}"...
+
+Task: Write ONE question that this text answers.
+Rules:
+1. The question must be specific.
+2. Do NOT say "According to the text" or "In this passage".
+3. Make it sound like a natural human curiosity.
+4. Output ONLY the question.
+"""
+            try:
+                output = self.llm(
+                    prompt,
+                    max_tokens=100,
+                    stop=["\n\n", "<|endoftext|>"],
+                    echo=False,
+                    temperature=0.7,
+                    top_p=0.9
+                )
+                question = output['choices'][0]['text'].strip()
+                if question:
+                    questions.append(question)
+            except Exception as e:
+                logger.warning(f"Failed to generate question: {e}")
+        return questions
+
+# ============================================================================
+# Q&A BUILDER (Modified to optionally use LLM)
 # ============================================================================
 
 class QABuilder:
-    """Generates diverse Q&A prompts from chunks."""
+    """Generates diverse Q&A prompts from chunks, optionally using local LLM."""
     def __init__(self, cfg: Config, model: SentenceTransformer):
         self.cfg = cfg
         self.model = model
+        self.llm_builder = None
+        if self.cfg.use_llm_for_pdf_qa and LLAMA_CPP_AVAILABLE and self.cfg.llm_model_path:
+            try:
+                self.llm_builder = LocalLLMQABuilder(self.cfg)
+                logger.info("✓ Using local LLM for question generation")
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM: {e}. Falling back to templates.")
     
     def _diverse_prompts(self, chunk_text: str, metadata: Dict) -> List[str]:
+        if self.llm_builder:
+            return self.llm_builder.generate_questions(
+                chunk_text, 
+                num_questions=self.cfg.num_questions_per_chunk
+            )
+        
+        # Fallback to template-based if no LLM
         paras = re.split(r'\n\n+', chunk_text)
         first = (paras[0][:500] if paras else chunk_text[:500]).strip()
         key_terms = list(set(re.findall(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\b', chunk_text)))
@@ -1442,7 +1534,7 @@ class OptimizedDataProcessor:
         return results
 
     # ========================================================================
-    # CREATE PDF Q&A PAIRS
+    # CREATE PDF Q&A PAIRS (Modified to use QABuilder which now supports LLM)
     # ========================================================================
 
     def create_pdf_qa_pairs(self, pdf_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1474,7 +1566,7 @@ class OptimizedDataProcessor:
                 chunk_text, metadata = entry.get('cleaned_text'), entry.get('metadata', {})
                 if not chunk_text: continue
                 
-                # Use QABuilder
+                # Use QABuilder (which now may use LLM)
                 questions = qa_builder._diverse_prompts(chunk_text, metadata)
                 
                 for question in questions:
@@ -1645,6 +1737,11 @@ def parse_args() -> Config:
     p.add_argument('--max-semantic-similarity', type=float, default=0.95, help='Max Q/A relevance (avoid identical)')
     p.add_argument('--qa-quality-score-threshold', type=float, default=0.46, help='Min composite score for a Q&A pair')
     
+    # --- LLM for PDF Q&A ---
+    p.add_argument('--use-llm-for-pdf-qa', action='store_true', help='Use local LLM for PDF question generation')
+    p.add_argument('--llm-model-path', default=None, help='Path to .gguf model file for llama-cpp-python')
+    p.add_argument('--num-questions-per-chunk', type=int, default=4, help='Number of questions to generate per PDF chunk')
+    
     # --- Misc ---
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--debug', action='store_true', help='Enable debug logging')
@@ -1676,6 +1773,9 @@ def parse_args() -> Config:
         min_semantic_similarity=args.min_semantic_similarity,
         max_semantic_similarity=args.max_semantic_similarity,
         qa_quality_score_threshold=args.qa_quality_score_threshold,
+        use_llm_for_pdf_qa=args.use_llm_for_pdf_qa,
+        llm_model_path=args.llm_model_path,
+        num_questions_per_chunk=args.num_questions_per_chunk,
         seed=args.seed
     )
     
@@ -1695,6 +1795,9 @@ def main(cfg: Config):
         logger.info(f"  - Mode: {cfg.semantic_mode}")
         logger.info(f"  - Method: {cfg.semantic_method}")
         logger.info(f"  - Keyphrases: {cfg.extract_keyphrases}")
+    logger.info(f"Using LLM for PDF Q&A: {cfg.use_llm_for_pdf_qa}")
+    if cfg.use_llm_for_pdf_qa:
+        logger.info(f"  - Model path: {cfg.llm_model_path}")
     logger.info("=" * 70)
     
     # Initialize processor with all components
@@ -1832,5 +1935,3 @@ def main(cfg: Config):
 if __name__ == "__main__":
     config = parse_args()
     main(config)
-
-        
