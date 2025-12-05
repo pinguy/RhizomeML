@@ -1622,13 +1622,13 @@ class RhizomeTrainer:
             default_batch_size = 4  # Micro-batch size
             default_grad_accum = 4  # To achieve effective batch of 16
             default_fp16 = False
-            default_gradient_checkpointing = False
+            default_gradient_checkpointing = True
         else:
             # GPU defaults
             default_batch_size = 2
             default_grad_accum = 8
             default_fp16 = False
-            default_gradient_checkpointing = False
+            default_gradient_checkpointing = True
         
         default_args = {
             "output_dir": output_dir,
