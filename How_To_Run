@@ -5,4 +5,7 @@ python3 train_script.py
 python3 gradio_chat_tts.py
 
 # Once happy can be turned into a GGUF for llama
+python3 -m venv venv_gguf
+source venv_gguf/bin/activate
 python3 convert_to_gguf.py
+deactivate
