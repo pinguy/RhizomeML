@@ -27,6 +27,6 @@ num_proc=1
 ```
 OOM Issues adjust these:
 
-default_batch_size = 2 # Doubles activation memory vs batch=1 but Faster
-default_grad_accum = 8 # Increases the effective batch → more time, not more VRAM/RAM
+default_batch_size = 2 # Doubles activation memory but Faster.
+default_grad_accum = 8 # Increases the effective batch → more time, not more VRAM/RAM.
 ```
