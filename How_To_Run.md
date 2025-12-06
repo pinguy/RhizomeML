@@ -15,16 +15,6 @@ deactivate
 ```
 ---
 ```
-train_script.py
-
-For CPU
-num_proc=1
-
-For GPU
-num_proc=0
-```
----
-```
 OOM Issues adjust these:
 
 default_batch_size = 2 # Doubles activation memory but Faster.
