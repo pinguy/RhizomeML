@@ -1,4 +1,9 @@
 import os
+#os.environ['MASTER_ADDR'] = 'localhost'
+#os.environ['MASTER_PORT'] = '9994' # modify if RuntimeError: Address already in use
+#os.environ['RANK'] = "0"
+#os.environ['LOCAL_RANK'] = "0"
+#os.environ['WORLD_SIZE'] = "1"
 
 try:
     config
@@ -1622,13 +1627,15 @@ class RhizomeTrainer:
             default_batch_size = 4  # Micro-batch size
             default_grad_accum = 4  # To achieve effective batch of 16
             default_fp16 = False
-            default_gradient_checkpointing = True
+            default_gradient_checkpointing = False
+            #deepspeed_config = None
         else:
             # GPU defaults
             default_batch_size = 2
             default_grad_accum = 8
             default_fp16 = False
-            default_gradient_checkpointing = True
+            default_gradient_checkpointing = False
+            #deepspeed_config = "deepspeed_config.json"
         
         default_args = {
             "output_dir": output_dir,
@@ -1663,6 +1670,7 @@ class RhizomeTrainer:
             "log_level_replica": "error",
             "logging_nan_inf_filter": False,
             "log_on_each_node": False,
+            #"deepspeed": deepspeed_config,
         }
         
         default_args["use_cpu"] = USE_CPU_ONLY
