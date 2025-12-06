@@ -2,7 +2,7 @@
 pip3 install -r requirements.txt --upgrade
 python3 pdf_to_json.py
 python3 batch_embedder.py # use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
-python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid --use-llm-for-pdf-qa --llm-model-path /path/to/your/model.gguf # Using a GPU remove --force-cpu
+python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid # Using a GPU remove --force-cpu
 python3 train_script.py
 python3 gradio_chat_tts.py # Ram heavy
 
