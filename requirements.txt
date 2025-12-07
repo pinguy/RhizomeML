@@ -37,5 +37,5 @@ faiss-cpu # faiss-gpu if using a gpu
 # Optional interactive/monitoring tools
 wandb
 spacy
-gradio
+gradio==5.49.1
 requests
