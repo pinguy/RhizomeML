@@ -6,8 +6,15 @@ for memory-augmented, expert-guided conversations.
 This version automatically detects and uses the model's native chat template,
 making it compatible with any instruction-tuned model (Gemma, Llama, Mistral, Qwen, etc.)
 
-checkpoint_path = "google/gemma-3-4b-it-qat-int4-unquantized"
+Includes "Hybrid Offloading" (Llama 4 prefill style) to split Attention/FFN between GPU/CPU.
+
+Replace:
+
 checkpoint_path = self._find_latest_checkpoint(config.base_dir)
+
+With something like this to run the model directly from HF instead of the FT version.
+
+checkpoint_path = "google/gemma-3-4b-it-qat-int4-unquantized"
 """
 
 import torch
@@ -27,7 +34,7 @@ import webbrowser
 import uuid
 import gc
 import concurrent.futures
-from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer, AutoConfig
 import logging
 import multiprocessing
 from dataclasses import dataclass
@@ -37,13 +44,22 @@ import psutil
 from pathlib import Path
 
 # Import UCS
-from UCS_v3_4_1 import (
-    UnifiedCognitionSystem,
-    VectorMemory,
-    HAS_NUMPY,
-    HAS_SENTENCE_TRANSFORMERS,
-    _logger as ucs_logger
-)
+# Note: Ensure UCS_v3_4_1.py is in the same directory
+try:
+    from UCS_v3_4_1 import (
+        UnifiedCognitionSystem,
+        VectorMemory,
+        HAS_NUMPY,
+        HAS_SENTENCE_TRANSFORMERS,
+        _logger as ucs_logger
+    )
+except ImportError:
+    print("⚠️ UCS_v3_4_1 not found. UCS features will be disabled.")
+    # Mock classes to prevent crash if UCS file is missing
+    HAS_NUMPY = False
+    HAS_SENTENCE_TRANSFORMERS = False
+    class UnifiedCognitionSystem: pass
+    class VectorMemory: pass
 
 # Try to import optional dependencies
 try:
@@ -71,6 +87,14 @@ try:
 except ImportError:
     BNB_AVAILABLE = False
     print("⚠️ bitsandbytes not available. Install with: pip install bitsandbytes")
+
+# Import accelerate for hybrid offloading
+try:
+    from accelerate import init_empty_weights
+    ACCELERATE_AVAILABLE = True
+except ImportError:
+    ACCELERATE_AVAILABLE = False
+    print("⚠️ accelerate not found. Hybrid offloading will be disabled.")
 
 
 # Suppress warnings
@@ -100,12 +124,18 @@ class Config:
     ucs_auto_save_interval: int = 300  # Save every 5 minutes
     ucs_fast_retrieval: bool = False  # False = use full cognitive loop with experts, True = fast direct retrieval
     
-    # NEW: BitsAndBytes Quantization
+    # Quantization
     use_quantization: bool = True  # Enable/disable quantization
     quantization_bits: int = 4  # 4-bit or 8-bit (4-bit recommended)
     bnb_4bit_compute_dtype: str = "float16"  # Compute dtype
     bnb_4bit_quant_type: str = "nf4"  # "nf4" or "fp4" (nf4 recommended)
     bnb_4bit_use_double_quant: bool = True  # Nested quantization for extra savings
+
+    # Hybrid Offloading (Split Compute / "Llama 4 prefill" style)
+    use_hybrid_offload: bool = False
+    # Regex pattern: map layers matching regex to device (cuda or cpu)
+    # Default: Attention on GPU (fast compute), MLP/FFN on CPU (save VRAM)
+    offload_pattern: str = ".*attn.*=cuda,.*mlp.*=cpu,.*feed_forward.*=cpu,.*experts.*=cpu"
 
 config = Config()
 
@@ -418,6 +448,18 @@ class EnhancedVoiceTranscriber:
             logger.error(f"Failed to load Vosk: {e}")
             return False
     
+    def cleanup(self):
+        """Explicitly release Vosk resources to prevent __del__ errors during shutdown"""
+        try:
+            if self.recognizer:
+                del self.recognizer
+                self.recognizer = None
+            if self.model:
+                del self.model
+                self.model = None
+        except Exception as e:
+            logger.debug(f"Error during Vosk cleanup: {e}")
+
     def transcribe_audio(self, audio_file_path: str) -> str:
         if not self.model or not audio_file_path or not Path(audio_file_path).exists():
             return "❌ Transcription unavailable"
@@ -994,6 +1036,85 @@ class UCSEnhancedChatBot:
             }
         ]
     
+    def _create_hybrid_device_map(self, model_path: str, pattern_str: str) -> Dict[str, Any]:
+        """
+        Creates a custom device map based on regex patterns.
+        Used for hybrid offloading (e.g. Attn on GPU, FFN on CPU).
+        
+        Args:
+            model_path: Path to model model
+            pattern_str: String like ".*attn.*=cuda,.*mlp.*=cpu"
+        """
+        if not ACCELERATE_AVAILABLE:
+            logger.error("Accelerate not available. Cannot create hybrid device map.")
+            return 'auto'
+        
+        logger.info(f"🏗️ Building hybrid device map from pattern: {pattern_str}")
+        
+        # Parse patterns
+        # Format: "regex=device,regex=device"
+        rules = []
+        for rule in pattern_str.split(','):
+            if '=' in rule:
+                reg, dev = rule.split('=', 1)
+                # Normalize device names
+                dev = dev.strip().lower()
+                if dev.upper() == 'GPU': dev = 'cuda'
+                if dev.upper() == 'CPU': dev = 'cpu'
+                if dev == 'cuda' and not torch.cuda.is_available():
+                    logger.warning("cuda requested but not available, falling back to cpu")
+                    dev = 'cpu'
+                
+                # Handle glob-like stars if user uses them (simple replacement)
+                # But keep full regex power if they know regex
+                reg = reg.strip()
+                rules.append((reg, dev))
+        
+        try:
+            # Load config to get structure without loading weights
+            config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+            
+            with init_empty_weights():
+                # Create skeleton model
+                fake_model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+            
+            device_map = {}
+            matched_layers = 0
+            
+            # Iterate through all modules
+            for name, _ in fake_model.named_modules():
+                if not name: continue
+                
+                # Check rules
+                assigned = False
+                for reg, dev in rules:
+                    if re.search(reg, name, re.IGNORECASE):
+                        device_map[name] = dev
+                        assigned = True
+                        matched_layers += 1
+                        break # First match wins
+            
+            # If no map created, return auto
+            if not device_map:
+                logger.warning("⚠️ No layers matched offload pattern. Using 'auto'.")
+                return 'auto'
+            
+            # Fallback for unmatched layers: usually let accelerate handle it or map to 'cpu' or 'cuda'
+            # We don't need to specify every layer, accelerate fills gaps.
+            # But we should ensure the embedding and head are somewhere sensible if not matched.
+            
+            logger.info(f"✅ Created hybrid map: {matched_layers} layers explicitly assigned.")
+            logger.info(f"   Sample assignments:")
+            sample_keys = list(device_map.keys())[:5]
+            for k in sample_keys:
+                logger.info(f"   - {k} -> {device_map[k]}")
+                
+            return device_map
+            
+        except Exception as e:
+            logger.error(f"Failed to create hybrid device map: {e}")
+            return 'auto'
+
     def load_models(self) -> bool:
         """Load model with optional quantization and UCS system"""
         try:
@@ -1060,22 +1181,35 @@ class UCSEnhancedChatBot:
                     logger.warning("⚠️ Quantization only supported on CUDA devices")
                     logger.warning(f"   Current device: {DEVICE.type}")
 
-                # Load model with quantization
+                # Load model with quantization OR hybrid offloading
                 try:
                     model_kwargs = {
                         'trust_remote_code': True,
                         'low_cpu_mem_usage': True,
                     }
                     
+                    # Handle Hybrid Offloading (Custom Device Map)
+                    if config.use_hybrid_offload and ACCELERATE_AVAILABLE:
+                        logger.info("⚡ Enabling Hybrid Offloading (Split Compute)")
+                        logger.info("   NOTE: Layers offloaded to CPU will likely NOT be quantized (fp16/fp32).")
+                        custom_map = self._create_hybrid_device_map(checkpoint_path, config.offload_pattern)
+                        model_kwargs['device_map'] = custom_map
+                    else:
+                        # Standard auto device map
+                        model_kwargs['device_map'] = {'': DEVICE} if DEVICE.type != 'cuda' else 'auto'
+
                     if quantization_config is not None:
                         # Quantized loading
                         model_kwargs['quantization_config'] = quantization_config
-                        model_kwargs['device_map'] = 'auto'  # Let bitsandbytes handle device placement
+                        # If using hybrid offload, we let 'device_map' provided above take precedence,
+                        # but standard usage of quantization often implies device_map='auto'.
+                        if not config.use_hybrid_offload:
+                             model_kwargs['device_map'] = 'auto'
+                             
                         logger.info("📦 Loading quantized model (this may take a moment)...")
                     else:
                         # Standard loading
                         model_kwargs['dtype'] = torch.float16 if DEVICE.type in ['cuda', 'mps'] else torch.float32
-                        model_kwargs['device_map'] = {'': DEVICE}
                         logger.info("📦 Loading model without quantization...")
                     
                     self.model = AutoModelForCausalLM.from_pretrained(
@@ -1090,6 +1224,10 @@ class UCSEnhancedChatBot:
                             logger.info(f"   - GPU memory used: {memory_used:.2f}GB")
                     else:
                         logger.info("✅ Model loaded successfully")
+                    
+                    # Log final device map if it's interesting
+                    if hasattr(self.model, 'hf_device_map'):
+                         logger.info(f"🗺️ Final device map keys: {len(self.model.hf_device_map)}")
                         
                 except Exception as e:
                     logger.error(f"Model loading failed: {e}")
@@ -1100,7 +1238,7 @@ class UCSEnhancedChatBot:
                     self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
                 
                 self.model.eval()
-                logger.info(f"✅ Model configured for {DEVICE}")
+                # logger.info(f"✅ Model configured for {DEVICE}")
             
             # Initialize UCS
             if self.ucs_enabled:
@@ -1844,12 +1982,17 @@ class UCSEnhancedChatBot:
         if self.chat_handler:
             model_info = f"\n- Model family: {self.chat_handler.model_family}"
         
+        # Offload stats
+        offload_info = ""
+        if config.use_hybrid_offload:
+             offload_info = f"\n- Hybrid Offload: Enabled\n- Pattern: {config.offload_pattern}"
+
         stats_report = f"""
 📊 **Session Stats:**
 - Total: {self.stats['total_responses']}
 - Avg time: {avg_time:.2f}s
 - Errors: {self.stats['error_count']}
-- Device: {DEVICE_INFO}{model_info}
+- Device: {DEVICE_INFO}{model_info}{offload_info}
 - TTS: {'Yes' if self.tts_processor else 'No'}
 - STT: {'Yes' if self.voice_transcriber else 'No'}
 
@@ -1954,6 +2097,9 @@ class UCSEnhancedChatBot:
         if self.tts_processor:
             self.tts_processor.shutdown()
         
+        if self.voice_transcriber:
+            self.voice_transcriber.cleanup()
+        
         self._cleanup_memory()
         logger.info("👋 Shutdown complete")
 
@@ -1993,11 +2139,26 @@ def shutdown_server():
     return "🛑 Server shutting down... Close this tab."
 
 def create_gradio_interface():
-    """Create the Gradio interface"""
+    """Create the Gradio interface with version compatibility check"""
     
-    with gr.Blocks(
-    title="Model-Agnostic Rhizome Chat with UCS"
-    ) as demo:
+    # Check if themes are supported (Gradio 3.22+)
+    blocks_kwargs = {
+        "title": "Model-Agnostic Rhizome Chat with UCS",
+        "css": """
+        .container { max-width: 1200px; margin: auto; }
+        .chat-container { height: 500px; }
+        """
+    }
+    
+    # Try to add theme argument safely
+    try:
+        if hasattr(gr, 'themes'):
+            blocks_kwargs['theme'] = gr.themes.Soft()
+    except Exception:
+        # If themes aren't supported or raise errors, we simply don't add the argument
+        pass
+
+    with gr.Blocks(**blocks_kwargs) as demo:
         
         gr.Markdown("""
         # 🌿 Model-Agnostic Rhizome Chat with UCS v3.4.1
@@ -2012,7 +2173,7 @@ def create_gradio_interface():
                 chatbot_interface = gr.Chatbot(
                     label="Chat",
                     height=500,
-                    buttons=["copy"]
+                    show_copy_button=True
                 )
                 
                 with gr.Row():
@@ -2080,11 +2241,23 @@ def create_gradio_interface():
                     )
                     speed_control = gr.Slider(0.5, 2.0, value=1.0, label="Speed")
                 
-                with gr.Accordion("🧠 UCS & Debug", open=False):
-                    use_ucs_checkbox = gr.Checkbox(label="Enable UCS", value=config.use_ucs and HAS_NUMPY)
-                    show_reasoning_checkbox = gr.Checkbox(label="Show Reasoning", value=False)
-                    enable_streaming_checkbox = gr.Checkbox(label="Enable Streaming", value=True, 
-                                                            info="Stream text as it's generated")
+                with gr.Accordion("🧠 Model & System", open=False):
+                    use_ucs_checkbox = gr.Checkbox(label="Enable UCS Memory", value=config.use_ucs and HAS_NUMPY)
+                    show_reasoning_checkbox = gr.Checkbox(label="Show Reasoning (if available)", value=False)
+                    enable_streaming_checkbox = gr.Checkbox(label="Enable Streaming", value=True)
+                    
+                    gr.Markdown("### Hybrid Offloading")
+                    use_hybrid_offload_checkbox = gr.Checkbox(
+                        label="Enable Split Compute", 
+                        value=config.use_hybrid_offload,
+                        info="Offload specific layers (like FFN) to CPU to save VRAM."
+                    )
+                    offload_pattern_input = gr.Textbox(
+                        label="Offload Pattern (Regex=Device)",
+                        value=".*attn.*=cuda,.*mlp.*=cpu,.*feed_forward.*=cpu,.*experts.*=cpu",
+                        info="Comma-separated rules. First match wins."
+                    )
+                    reload_model_btn = gr.Button("🔄 Reload Model with Settings")
                     
                     with gr.Row():
                         save_memory_btn = gr.Button("💾 Save Memory")
@@ -2106,13 +2279,11 @@ def create_gradio_interface():
 ### Tips for best results:
 - **Model Agnostic**: Works with Gemma, Llama, Mistral, Qwen, Phi, and more!
 - **Streaming**: Enable "Enable Streaming" to see text appear in real-time as it's generated
+- **Hybrid Offloading**: Use the regex pattern to map Attention to GPU (fast) and MLP/Experts to CPU (save RAM). 
+    - Example: `.*attn.*=cuda,.*mlp.*=cpu`
 - Enable "Enable UCS" for memory-augmented responses
 - Ask about previous conversations - UCS remembers!
 - Enable "Show Reasoning" to see thought process (for reasoning models like DeepSeek)
-- Try different presets for varied response styles
-- Custom system prompts allow full control
-- UCS auto-saves memory every 5 minutes
-- TTS now handles longer responses with line breaks
             """)
 
         # Event handlers - supporting both streaming and non-streaming modes
@@ -2182,6 +2353,23 @@ def create_gradio_interface():
         def handle_clear_memory():
             result = chatbot.clear_ucs_memory()
             return result, chatbot.get_comprehensive_stats()
+            
+        def handle_reload_model(hybrid_enabled, pattern):
+            config.use_hybrid_offload = hybrid_enabled
+            config.offload_pattern = pattern
+            
+            # Unload current model
+            if chatbot.model:
+                del chatbot.model
+                chatbot.model = None
+            chatbot._cleanup_memory()
+            
+            # Reload
+            success = chatbot.load_models()
+            status = "✅ Model Reloaded with Hybrid Offload" if success else "❌ Reload Failed"
+            if hybrid_enabled:
+                 status += f"\nPattern: {pattern}"
+            return status
 
         # Wire up events - using streaming for real-time text output
         send_btn.click(
@@ -2264,6 +2452,12 @@ def create_gradio_interface():
             fn=handle_clear_memory,
             outputs=[memory_status, stats_display]
         )
+        
+        reload_model_btn.click(
+            fn=handle_reload_model,
+            inputs=[use_hybrid_offload_checkbox, offload_pattern_input],
+            outputs=[memory_status]
+        )
 
     return demo
 
@@ -2276,6 +2470,9 @@ def open_browser():
 def main():
     """Main function"""
     logger.info("🚀 Starting Model-Agnostic UCS-Enhanced Rhizome Chat Interface...")
+    
+    # Check if necessary directories exist
+    os.makedirs(config.base_dir, exist_ok=True)
     
     if not chatbot.load_models():
         logger.error("❌ Failed to initialize. Check your model path.")
@@ -2317,6 +2514,9 @@ def main():
         browser_thread = threading.Thread(target=open_browser)
         browser_thread.daemon = True
         browser_thread.start()
+
+    # Enable queue for streaming - REQUIRED for generators in Gradio 3.x+
+    demo.queue()
 
     try:
         demo.launch(
