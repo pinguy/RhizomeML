@@ -4,6 +4,7 @@ pip3 install --force-reinstall https://github.com/bitsandbytes-foundation/bitsan
 python3 pdf_to_json.py
 python3 batch_embedder.py # use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
 python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid # Using a GPU remove --force-cpu
+rm -rf data_finetune/tokenized_cache
 python3 train_script.py
 python3 gradio_chat_tts.py # Ram heavy
 
