@@ -1,5 +1,5 @@
 import os
-
+# Replace "Qwen/Qwen3-1.7B" with modle you want to finetune
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -495,7 +495,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "google/gemma-3-1b-it-qat-int4-unquantized")
+        model_name: The model name or path (e.g., "Qwen/Qwen3-1.7B")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -1341,7 +1341,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
+    def __init__(self, model_name="Qwen/Qwen3-1.7B"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -1390,42 +1390,18 @@ class RhizomeTrainer:
                 try:
                     from transformers import BitsAndBytesConfig
                     
-                    # NEW: Constraint GPU memory for 6GB cards running Gemma
-                    # Gemma's embedding layer (256k vocab) requires 2.5GB VRAM when upcasted to fp32.
-                    # We must restrict the initial load to ~3GB to leave room for this upcast.
-                    max_memory_mapping = None
-                    enable_cpu_offload = False # Flag to track if we need the offload setting
-
-                    if not USE_CPU_ONLY and torch.cuda.is_available():
-                        gpu_props = torch.cuda.get_device_properties(0)
-                        total_vram_gb = gpu_props.total_memory / (1024**3)
-                        
-                        if total_vram_gb < 7.0: # Target 6GB cards
-                            logger.info(f"🛡️ Low VRAM ({total_vram_gb:.1f}GB) detected. Restricting initial model load to 3GB.")
-                            logger.info("   This forces the massive embedding layers to CPU RAM to prevent OOM.")
-                            max_memory_mapping = {0: "3GiB"}
-                            enable_cpu_offload = True
-                    
-                    # === FIX: Disable offload to avoid bitsandbytes error; rely on GPU for 6GB VRAM ===
-                    enable_cpu_offload = False
-                    max_memory_mapping = None
-                    logger.warning("⚠️ Disabling CPU offload as workaround for bitsandbytes compatibility. Monitor for OOM with nvidia-smi.")
-                    # === END FIX ===
-                    
                     # Configure 4-bit quantization
                     bnb_config = BitsAndBytesConfig(
                         load_in_4bit=True,
                         bnb_4bit_quant_type="nf4",
                         bnb_4bit_compute_dtype=torch.bfloat16 if DEVICE_DETAILS.get('uses_bf16', False) else torch.float32,
                         bnb_4bit_use_double_quant=True,
-                        llm_int8_enable_fp32_cpu_offload=enable_cpu_offload, # <--- THE FIX
                     )
                     
                     self.model = AutoModelForCausalLM.from_pretrained(
                         self.model_name,
                         quantization_config=bnb_config,
                         device_map="auto" if not USE_CPU_ONLY else "cpu",
-                        max_memory=max_memory_mapping, # Apply the constraint
                         low_cpu_mem_usage=True,
                     )
                     
@@ -1657,19 +1633,14 @@ class RhizomeTrainer:
             default_grad_accum = 4  # To achieve effective batch of 16
             default_fp16 = False
             default_gradient_checkpointing = False
-            default_optim = "adamw_torch"
+            #deepspeed_config = None
         else:
-            # GPU defaults - LOW VRAM OPTIMIZED
-            # 1. We use batch size 1 to minimize activation memory
+            # GPU defaults
             default_batch_size = 2
-            # 2. We use high grad accum to compensate for small batch size
             default_grad_accum = 8
-            # 3. We use Gradient Checkpointing to trade compute for memory
-            default_gradient_checkpointing = True
-            # 4. CRITICAL: Paged Optimizer puts optimizer state in CPU RAM
-            default_optim = "paged_adamw_32bit"
-            default_fp16 = False # Usually safer to keep False for QLoRA unless native 16-bit
-            
+            default_fp16 = False
+            default_gradient_checkpointing = False
+            #deepspeed_config = "deepspeed_config.json"
         
         default_args = {
             "output_dir": output_dir,
@@ -1696,7 +1667,7 @@ class RhizomeTrainer:
             "seed": 42,
             "fp16": default_fp16,
             "gradient_checkpointing": default_gradient_checkpointing,
-            "optim": default_optim,
+            "optim": "adamw_torch",
             "lr_scheduler_type": "cosine",
             "report_to": "none",
             "disable_tqdm": False,
@@ -1784,9 +1755,6 @@ class RhizomeTrainer:
             logger.info(f"💡 Gradient Checkpointing: {training_args.gradient_checkpointing}")
             logger.info(f"🚫 CPU-only mode: {training_args.use_cpu}")
             logger.info(f"🔬 QLoRA 4-bit: {USE_QLORA}")
-            
-            if training_args.optim == "paged_adamw_32bit":
-                logger.info("🧠 Optimizer Strategy: Paged AdamW (Optimizer State on CPU)")
             
             # Display CPU optimizations
             if USE_CPU_ONLY:
@@ -1986,7 +1954,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
+    trainer = RhizomeTrainer(model_name="Qwen/Qwen3-1.7B")
     
     try:
         # Call the main training function with desired parameters
