@@ -10,13 +10,6 @@
     "overlap_comm": true,
     "reduce_scatter": true
   },
-  "fp16": {
-    "enabled": true,
-    "loss_scale": 0,
-    "loss_scale_window": 1000,
-    "hysteresis": 2,
-    "min_loss_scale": 1
-  },
   "gradient_accumulation_steps": "auto",
   "gradient_clipping": "auto",
   "train_batch_size": "auto",
