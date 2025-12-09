@@ -975,7 +975,7 @@ def main():
         chunk_size=400,
         max_chunk_overlap=50,
         min_text_length=15, # Adjusted
-        use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
+        use_gpu=True,  # Set to True if you have a compatible GPU (CUDA)
         index_type='flat',
         deduplication=True,
         min_sentence_length=5, # Adjusted
@@ -1023,4 +1023,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
