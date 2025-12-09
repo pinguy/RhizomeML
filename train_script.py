@@ -1,5 +1,5 @@
 import os
-# Replace "Qwen/Qwen3-1.7B" with modle you want to finetune
+# Replace "Qwen/Qwen3-1.7B" with model you want to finetune
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
