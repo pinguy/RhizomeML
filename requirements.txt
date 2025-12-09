@@ -5,7 +5,6 @@ datasets
 peft
 sentence-transformers
 bitsandbytes
-deepspeed
 accelerate
 llama-cpp-python
 
