@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EmbeddingConfig:
     """Configuration for the embedding process"""
-    model_name: str = 'all-MiniLM-L12-v2'
-    batch_size: int = 64
-    chunk_size: int = 400
+    model_name: str = 'all-MiniLM-L6-v2'
+    batch_size: int = 32
+    chunk_size: int = 512
     max_chunk_overlap: int = 50
     min_text_length: int = 15  # Relaxed from 20/30
     max_text_length: int = 2000 # This now acts more as a max chunk length, not total message length
@@ -975,7 +975,7 @@ def main():
         chunk_size=400,
         max_chunk_overlap=50,
         min_text_length=15, # Adjusted
-        use_gpu=True,  # Set to True if you have a compatible GPU (CUDA)
+        use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
         index_type='flat',
         deduplication=True,
         min_sentence_length=5, # Adjusted
