@@ -1,4 +1,6 @@
 ```
+git clone https://github.com/pinguy/RhizomeML.git
+cd RhizomeML
 pip3 install -r requirements.txt --upgrade
 DS_SKIP_CUDA_CHECK=1 DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip3 install deepspeed
 python3 -m deepspeed.env_report
