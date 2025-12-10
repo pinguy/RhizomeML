@@ -1,5 +1,5 @@
 import os
-# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with modle you want to finetune. Models around 2b and under train fine on 6GB of VRAM using something like a GTX 1660.
+# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with the modle you want to finetune. Models around 2b and under train fine on 6GB of VRAM using something like a GTX 1660.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
