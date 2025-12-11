@@ -39,7 +39,7 @@ python3 data_formatter.py \
 # Remove --force-cpu when using a compatible GPU.
 ```
 
-If you retrain on the same base model and hit metadata errors, clear the cached tokenization:
+If you retrain on the same base model and hit tokenized dataset errors, clear the cached tokenization:
 
 ```bash
 rm -rf data_finetune/tokenized_cache
