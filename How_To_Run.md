@@ -117,7 +117,7 @@ Edit these values in `train_script.py`:
 ```python
 default_batch_size = 2   # Higher value = faster training, but higher activation memory. Use 1 for the lowest memory footprint.
 default_grad_accum = 8   # Effective batch = batch_size × grad_accum.
-                         # Affects speed, not memory. Target effective batch: 16 (e.g., 4×4, 2×8, 1×16).
+                         # Affects speed (higher slower), not memory. Target effective batch: 16 (e.g., 4×4, 2×8, 1×16).
 ```
 
 ---
