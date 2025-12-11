@@ -128,7 +128,7 @@ python3 data_formatter.py
 python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid
 ```
 
-> LoRA fine-tuning on Deepseek. Outputs go into `DeepSeek-R1-Distill-Qwen-1.5B-finetuned/`.
+> LoRA fine-tuning on Deepseek. Outputs go into `RhizomeML-finetuned/`.
 
 ---
 
@@ -138,7 +138,7 @@ python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode
 python3 gradio_chat_tts.py
 ```
 
-> Loads latest `checkpoint-*` from `DeepSeek-R1-Distill-Qwen-1.5B-finetuned/` and runs in an interactive loop.
+> Loads latest `checkpoint-*` from `RhizomeML-finetuned/` and runs in an interactive loop.
 
 ---
 
