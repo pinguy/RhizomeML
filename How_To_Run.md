@@ -6,12 +6,12 @@ DS_SKIP_CUDA_CHECK=1 DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip3 install deepspeed
 python3 -m deepspeed.env_report
 python3 pdf_to_json.py
 python3 batch_embedder.py # use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
-python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid # Using a GPU remove --force-cpu
+python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid # Using a compatible GPU remove --force-cpu
 rm -rf data_finetune/tokenized_cache
 python3 train_script.py
 python3 gradio_chat_tts.py # Ram heavy
 
-# For STT to work with graio download and unzip this pack. That will download the largest but small ones are available
+# For STT to work with graio download and unzip this pack. That will download the largest one but smaller more memory friendly ones are available
 
 wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.42-gigaspeech.zip
 unzip vosk-model-en-us-0.42-gigaspeech.zip
