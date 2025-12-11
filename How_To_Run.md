@@ -70,6 +70,13 @@ This occurs when reusing cached data with a different base model than the one it
 rm -rf data_finetune/tokenized_cache
 ```
 
+## **Model Selection**
+
+Change the base model in `train_script.py`:
+```python
+model_name="google/gemma-3-1b-it"  # To any CAUSAL_LM HuggingFace model
+```
+
 ---
 
 ## **Gradio Chat + TTS (RAM Heavy)**
