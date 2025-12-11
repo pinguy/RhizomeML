@@ -5,11 +5,13 @@ git clone https://github.com/pinguy/RhizomeML.git
 cd RhizomeML
 
 pip3 install -r requirements.txt --upgrade
+```
 
-# Install DeepSpeed (CPU-optimized build)
+### **Install DeepSpeed (CPU-Optimized Build)**
+
+```bash
 DS_SKIP_CUDA_CHECK=1 DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip3 install deepspeed
 
-# Check the DeepSpeed environment:
 python3 -m deepspeed.env_report
 # Adam should be enabled. ZeRO-Offload is mostly configured but disabled by default.
 ```
@@ -18,17 +20,30 @@ python3 -m deepspeed.env_report
 
 ## **Data Preparation**
 
+Place your PDFs inside:
+
+```
+./PDFs/
+```
+
 ```bash
 python3 pdf_to_json.py
 ```
 
-### **Embedding Stage** : **Make sure you have your exported conversations.json in the root dir**
+---
+
+## **Embedding Stage**
+
+Ensure `conversations.json` is in the working directory.
 
 ```bash
-python3 batch_embedder.py  # Defaults to CPU. Set use_gpu=True if you have CUDA.
+python3 batch_embedder.py
+# Defaults to CPU. Set use_gpu=True if you have CUDA.
 ```
 
-### **Semantic Processing**
+---
+
+## **Semantic Processing**
 
 ```bash
 python3 data_formatter.py \
@@ -38,6 +53,7 @@ python3 data_formatter.py \
     --semantic-method hybrid
 # Remove --force-cpu when using a compatible GPU.
 ```
+
 ---
 
 ## **Training**
@@ -47,7 +63,7 @@ python3 train_script.py
 ```
 
 If you encounter tokenization errors, clear the cached tokenized dataset.
-This can happen when reusing cached data with a different base model than the one it was originally created for:
+This occurs when reusing cached data with a different base model than the one it was created for:
 
 ```bash
 rm -rf data_finetune/tokenized_cache
@@ -55,7 +71,7 @@ rm -rf data_finetune/tokenized_cache
 
 ---
 
-## **Gradio Chat + TTS (RAM heavy)**
+## **Gradio Chat + TTS (RAM Heavy)**
 
 ```bash
 python3 gradio_chat_tts.py
@@ -63,7 +79,7 @@ python3 gradio_chat_tts.py
 
 ### **STT Setup (Vosk)**
 
-Gradio STT requires a speech model. Download the large pack below (smaller ones also work):
+Download a Vosk speech model (large shown here; smaller ones work too):
 
 ```bash
 wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.42-gigaspeech.zip
@@ -72,13 +88,15 @@ unzip vosk-model-en-us-0.42-gigaspeech.zip
 
 ---
 
-## **Convert the Final Model to GGUF (for llama.cpp)**
+## **Export to GGUF (for llama.cpp)**
 
 ```bash
 python3 -m venv venv_gguf
 source venv_gguf/bin/activate
+
 pip3 install peft
 python3 convert_to_gguf.py
+
 deactivate
 ```
 
@@ -86,25 +104,27 @@ deactivate
 
 # **OOM Adjustments**
 
-Modify these lines in `train_script.py`:
+Edit these values in `train_script.py`:
 
 ```python
 default_batch_size = 2   # Higher value = faster training, but higher activation memory. Use 1 for the lowest memory footprint.
 default_grad_accum = 8   # Effective batch = batch_size × grad_accum.
-                         # Affects speed, not memory. Default target: 16 (e.g., 4×4, 2×8, 1×16).
+                         # Affects speed, not memory. Target effective batch: 16 (e.g., 4×4, 2×8, 1×16).
 ```
 
 ---
 
 # **Theme-Based Early Stopping**
 
-Training ends when either:
+Training stops when:
 
-* The epoch limit is reached (default: 3), **or**
-* All semantic themes have been observed.
+* the epoch limit is reached (default: 3), **or**
+* all semantic themes have been observed.
 
-To adjust the early-stopping rule, look for:
+To change this behavior, modify:
 
 ```python
 metrics['coverage'] >= 1.0
 ```
+
+---
