@@ -34,7 +34,7 @@ python3 pdf_to_json.py
 
 ## **Embedding Stage**
 
-Ensure `conversations.json`/`conversations2.json` exported from ChatGPT/Claude is in the working directory. If nor skipped.
+Ensure `conversations.json`/`conversations2.json` exported from ChatGPT/Claude is in the working directory. If not present, this step is skipped.
 
 ```bash
 python3 batch_embedder.py
