@@ -1,8 +1,15 @@
 import os
-# Replace "google/gemma-3-1b-it" with modle you want to finetune
+# Replace "googlegoogle/gemma-3-1b-it" with modle you want to finetune
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# Suppress DeepSpeed accelerator warning
+os.environ["DS_ACCELERATOR"] = "cuda"  # Prevents "Setting accelerator to CPU" warning
+
+# Suppress PyTorch cpp_extension CUDA warning when running on CPU
+import logging
+logging.getLogger("torch.utils.cpp_extension").setLevel(logging.ERROR)
 
 #os.environ['MASTER_ADDR'] = 'localhost'
 #os.environ['MASTER_PORT'] = '9994' # modify if RuntimeError: Address already in use
@@ -108,6 +115,8 @@ def setup_logging():
     logging.getLogger("transformers.trainer").setLevel(logging.ERROR)
     logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
     logging.getLogger("peft").setLevel(logging.ERROR)
+    logging.getLogger("deepspeed").setLevel(logging.ERROR)
+    logging.getLogger("real_accelerator").setLevel(logging.ERROR)
     
     return logging.getLogger(__name__)
 
@@ -495,7 +504,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "google/gemma-3-1b-it")
+        model_name: The model name or path (e.g., "googlegoogle/gemma-3-1b-it")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -790,19 +799,61 @@ class TrainingLogger(TrainerCallback):
         self.resumed_from_checkpoint = False
         self.checkpoint_start_step = 0
         self.checkpoint_start_time = None
+        self._step_to_idx = {}  # Map step -> index for fast lookup
+        
+        # For calculating speed metrics ourselves
+        self._last_speed_calc_time = None
+        self._last_speed_calc_step = 0
         
         # Try to load existing metrics if resuming
-        metrics_file = self.output_dir / "training_metrics.json"
-        if metrics_file.exists():
+        # First check main output dir, then look in checkpoint folders
+        metrics_file = None
+        
+        # Check main output directory first
+        main_metrics = self.output_dir / "training_metrics.json"
+        if main_metrics.exists():
+            metrics_file = main_metrics
+        else:
+            # Look for the latest checkpoint's metrics
+            checkpoint_dirs = sorted(
+                [d for d in self.output_dir.iterdir() 
+                 if d.is_dir() and d.name.startswith("checkpoint-")],
+                key=lambda x: int(x.name.split("-")[-1]),
+                reverse=True  # Latest checkpoint first
+            ) if self.output_dir.exists() else []
+            
+            for ckpt_dir in checkpoint_dirs:
+                ckpt_metrics = ckpt_dir / "training_metrics.json"
+                if ckpt_metrics.exists():
+                    metrics_file = ckpt_metrics
+                    logger.info(f"📂 Found metrics in checkpoint folder: {ckpt_dir.name}")
+                    break
+        
+        if metrics_file and metrics_file.exists():
             try:
                 with open(metrics_file, 'r') as f:
                     saved_metrics = json.load(f)
-                    # Restore metrics from saved file
-                    self.metrics = saved_metrics
+                    
+                    # Validate and merge saved metrics
+                    # Only replace keys that exist in saved_metrics, keep defaults for new keys
+                    for key in self.metrics:
+                        if key in saved_metrics and isinstance(saved_metrics[key], list):
+                            self.metrics[key] = saved_metrics[key]
+                    
                     self.resumed_from_checkpoint = True
                     if self.metrics['step']:
                         self.checkpoint_start_step = max(self.metrics['step'])
-                    logger.info(f"📊 Loaded previous metrics up to step {self.checkpoint_start_step}")
+                        # Build step->index map
+                        self._step_to_idx = {step: idx for idx, step in enumerate(self.metrics['step'])}
+                        
+                        # Ensure all metric lists are at least as long as step list
+                        base_length = len(self.metrics['step'])
+                        for key in self.metrics:
+                            if key not in ['step', 'epoch']:
+                                while len(self.metrics[key]) < base_length:
+                                    self.metrics[key].append(None)
+                    
+                    logger.info(f"📊 Loaded previous metrics: {len(self.metrics['step'])} steps up to step {self.checkpoint_start_step}")
             except Exception as e:
                 logger.warning(f"Could not load previous metrics: {e}")
         
@@ -842,12 +893,41 @@ class TrainingLogger(TrainerCallback):
             # We're resuming from a checkpoint
             # self.checkpoint_start_step was already set in __init__ from saved metrics
             self.checkpoint_start_time = time.time()
+            self._last_speed_calc_time = self.checkpoint_start_time
+            self._last_speed_calc_step = self.checkpoint_start_step
             logger.info(f"🔄 Resuming training from step {self.checkpoint_start_step}")
         else:
             # Fresh training start
             self.start_time = time.time()
             self.checkpoint_start_time = self.start_time
+            self._last_speed_calc_time = self.start_time
+            self._last_speed_calc_step = 0
             logger.info("🆕 Starting fresh training run")
+    
+    def _get_or_create_step_index(self, step, epoch):
+        """Get index for a step, creating a new entry if needed"""
+        if step in self._step_to_idx:
+            return self._step_to_idx[step]
+        
+        # Create new entry
+        idx = len(self.metrics['step'])
+        self.metrics['step'].append(step)
+        self.metrics['epoch'].append(epoch)
+        self._step_to_idx[step] = idx
+        
+        # Extend all other metric lists with None
+        for key in self.metrics:
+            if key not in ['step', 'epoch']:
+                while len(self.metrics[key]) < len(self.metrics['step']):
+                    self.metrics[key].append(None)
+        
+        return idx
+    
+    def _set_metric(self, key, idx, value):
+        """Set a metric value at a specific index, extending list if needed"""
+        while len(self.metrics[key]) <= idx:
+            self.metrics[key].append(None)
+        self.metrics[key][idx] = value
     
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         """Called when logging occurs"""
@@ -857,90 +937,51 @@ class TrainingLogger(TrainerCallback):
         current_step = state.global_step
         current_epoch = state.epoch
         
-        # Store basic info
-        if current_step not in self.metrics['step']:
-            self.metrics['step'].append(current_step)
-            self.metrics['epoch'].append(current_epoch)
+        # Get or create index for this step
+        idx = self._get_or_create_step_index(current_step, current_epoch)
         
         # Store available metrics
         if 'loss' in logs:
-            if len(self.metrics['train_loss']) < len(self.metrics['step']):
-                self.metrics['train_loss'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_loss'])))
-            if len(self.metrics['train_loss']) == len(self.metrics['step']):
-                self.metrics['train_loss'][-1] = logs['loss']
-            else:
-                self.metrics['train_loss'].append(logs['loss'])
+            self._set_metric('train_loss', idx, logs['loss'])
                 
         if 'eval_loss' in logs:
-            if len(self.metrics['eval_loss']) < len(self.metrics['step']):
-                self.metrics['eval_loss'].extend([None] * (len(self.metrics['step']) - len(self.metrics['eval_loss'])))
-            if len(self.metrics['eval_loss']) == len(self.metrics['step']):
-                self.metrics['eval_loss'][-1] = logs['eval_loss']
-            else:
-                self.metrics['eval_loss'].append(logs['eval_loss'])
+            self._set_metric('eval_loss', idx, logs['eval_loss'])
                 
         if 'learning_rate' in logs:
-            if len(self.metrics['learning_rate']) < len(self.metrics['step']):
-                self.metrics['learning_rate'].extend([None] * (len(self.metrics['step']) - len(self.metrics['learning_rate'])))
-            if len(self.metrics['learning_rate']) == len(self.metrics['step']):
-                self.metrics['learning_rate'][-1] = logs['learning_rate']
-            else:
-                self.metrics['learning_rate'].append(logs['learning_rate'])
+            self._set_metric('learning_rate', idx, logs['learning_rate'])
                 
         if 'grad_norm' in logs:
-            if len(self.metrics['grad_norm']) < len(self.metrics['step']):
-                self.metrics['grad_norm'].extend([None] * (len(self.metrics['step']) - len(self.metrics['grad_norm'])))
-            if len(self.metrics['grad_norm']) == len(self.metrics['step']):
-                self.metrics['grad_norm'][-1] = logs['grad_norm']
-            else:
-                self.metrics['grad_norm'].append(logs['grad_norm'])
+            self._set_metric('grad_norm', idx, logs['grad_norm'])
 
-        # --- PATCHED IN ---
-        # NEW: Handle theme metrics logged from ThemeAwareTrainer
+        # Handle theme metrics logged from ThemeAwareTrainer
         if 'train_theme_entropy' in logs:
-            if len(self.metrics['train_theme_diversity']) < len(self.metrics['step']):
-                self.metrics['train_theme_diversity'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_theme_diversity'])))
-            if len(self.metrics['train_theme_diversity']) == len(self.metrics['step']):
-                self.metrics['train_theme_diversity'][-1] = logs['train_theme_entropy']
-            else:
-                self.metrics['train_theme_diversity'].append(logs['train_theme_entropy'])
+            self._set_metric('train_theme_diversity', idx, logs['train_theme_entropy'])
                 
         if 'train_theme_coverage' in logs:
-            if len(self.metrics['train_theme_coverage']) < len(self.metrics['step']):
-                self.metrics['train_theme_coverage'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_theme_coverage'])))
-            if len(self.metrics['train_theme_coverage']) == len(self.metrics['step']):
-                self.metrics['train_theme_coverage'][-1] = logs['train_theme_coverage']
-            else:
-                self.metrics['train_theme_coverage'].append(logs['train_theme_coverage'])
-        # --- END PATCH ---
+            self._set_metric('train_theme_coverage', idx, logs['train_theme_coverage'])
                 
-        # Performance metrics - calculate properly when resuming
-        if 'train_runtime' in logs or 'train_samples_per_second' in logs or 'train_steps_per_second' in logs:
-            # Calculate speeds based on time since checkpoint if resuming
-            if self.checkpoint_start_time and current_step > self.checkpoint_start_step:
-                elapsed_time = time.time() - self.checkpoint_start_time
-                steps_since_checkpoint = current_step - self.checkpoint_start_step
+        # Calculate our own speed metrics since HuggingFace doesn't log them consistently
+        current_time = time.time()
+        if self._last_speed_calc_time and current_step > self._last_speed_calc_step:
+            elapsed = current_time - self._last_speed_calc_time
+            steps_done = current_step - self._last_speed_calc_step
+            
+            if elapsed > 0:
+                steps_per_second = steps_done / elapsed
+                # Effective batch size = per_device_batch * gradient_accumulation
+                effective_batch = args.per_device_train_batch_size * args.gradient_accumulation_steps
+                samples_per_second = steps_per_second * effective_batch
                 
-                # Calculate actual speeds since resume
-                if elapsed_time > 0:
-                    actual_steps_per_second = steps_since_checkpoint / elapsed_time
-                    actual_samples_per_second = actual_steps_per_second * args.train_batch_size
-                    
-                    # Override the reported speeds with our calculated ones
-                    if 'train_steps_per_second' in logs:
-                        logs['train_steps_per_second'] = actual_steps_per_second
-                    if 'train_samples_per_second' in logs:
-                        logs['train_samples_per_second'] = actual_samples_per_second
+                self._set_metric('train_steps_per_second', idx, steps_per_second)
+                self._set_metric('train_samples_per_second', idx, samples_per_second)
         
-        # Store performance metrics
-        for key in ['train_runtime', 'train_samples_per_second', 'train_steps_per_second']:
-            if key in logs:
-                if len(self.metrics[key]) < len(self.metrics['step']):
-                    self.metrics[key].extend([None] * (len(self.metrics['step']) - len(self.metrics[key])))
-                if len(self.metrics[key]) == len(self.metrics['step']):
-                    self.metrics[key][-1] = logs[key]
-                else:
-                    self.metrics[key].append(logs[key])
+        # Update tracking for next calculation
+        self._last_speed_calc_time = current_time
+        self._last_speed_calc_step = current_step
+        
+        # Also capture any speed metrics that HuggingFace does provide
+        if 'train_runtime' in logs:
+            self._set_metric('train_runtime', idx, logs['train_runtime'])
     
     def on_evaluate(self, args, state, control, model=None, metrics=None, **kwargs):
         """Called after evaluation - track semantic diversity"""
@@ -954,22 +995,22 @@ class TrainingLogger(TrainerCallback):
             logger.info(f"   • Entropy: {diversity_metrics['entropy']:.3f}")
             logger.info(f"   • Coverage: {diversity_metrics['coverage']:.1%}")
             
-            # Store in metrics
+            # Store in metrics using helper methods
             current_step = state.global_step
-            if current_step in self.metrics['step']:
-                idx = self.metrics['step'].index(current_step)
-                
-                # Pad lists if needed
-                for key in ['eval_theme_diversity', 'eval_theme_coverage']:
-                    if len(self.metrics[key]) < len(self.metrics['step']):
-                        self.metrics[key].extend([None] * (len(self.metrics['step']) - len(self.metrics[key])))
-                
-                self.metrics['eval_theme_diversity'][idx] = diversity_metrics['entropy']
-                self.metrics['eval_theme_coverage'][idx] = diversity_metrics['coverage']
+            current_epoch = state.epoch if state.epoch else 0
+            idx = self._get_or_create_step_index(current_step, current_epoch)
+            
+            self._set_metric('eval_theme_diversity', idx, diversity_metrics['entropy'])
+            self._set_metric('eval_theme_coverage', idx, diversity_metrics['coverage'])
     
     def on_save(self, args, state, control, model=None, **kwargs):
         """Called when model checkpoint is saved"""
         checkpoint_dir = self.output_dir / f"checkpoint-{state.global_step}"
+        
+        # Always save to main output directory (for full history)
+        self.save_metrics_and_plots(self.output_dir)
+        
+        # Also save to checkpoint directory (for checkpoint-specific snapshot)
         self.save_metrics_and_plots(checkpoint_dir)
         
         # Save theme tracker state if available
@@ -1462,7 +1503,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-1b-it"):
+    def __init__(self, model_name="googlegoogle/gemma-3-1b-it"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -2090,7 +2131,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it")
+    trainer = RhizomeTrainer(model_name="googlegoogle/gemma-3-1b-it")
     
     try:
         # Call the main training function with desired parameters
