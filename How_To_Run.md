@@ -38,19 +38,19 @@ python3 data_formatter.py \
     --semantic-method hybrid
 # Remove --force-cpu when using a compatible GPU.
 ```
-
-If you retrain on the same base model and hit tokenized dataset errors, clear the cached tokenization:
-
-```bash
-rm -rf data_finetune/tokenized_cache
-```
-
 ---
 
 ## **Training**
 
 ```bash
 python3 train_script.py
+```
+
+If you encounter tokenization errors, clear the cached tokenized dataset.
+This can happen when reusing cached data with a different base model than the one it was originally created for:
+
+```bash
+rm -rf data_finetune/tokenized_cache
 ```
 
 ---
