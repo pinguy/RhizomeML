@@ -530,10 +530,10 @@ class SemanticLabeler:
     """Enhanced labeler with phrase/word separation and incremental TF-IDF"""
     
     FALLBACK_STOPWORDS = {
-        'like', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
         'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
         'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
-        'would', 'should', 'could', 'may', 'might', 'must', 'can', 'shall', 'let'
+        'would', 'should', 'could', 'may', 'might', 'must', 'can', 'shall'
     }
     
     def __init__(self, cfg: Config, embedding_model=None):
