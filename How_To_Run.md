@@ -7,7 +7,7 @@ python3 -m deepspeed.env_report
 python3 pdf_to_json.py
 python3 batch_embedder.py # use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
 python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid # Using a compatible GPU remove --force-cpu
-rm -rf data_finetune/tokenized_cache # Removes the semantic themes arrow. If retraining the say type of base mode don't have to remove but get and error probably because of that.
+rm -rf data_finetune/tokenized_cache # Removes the semantic themes arrow. If retraining the same base mode don't have to remove but ig you get an error its probably due to that.
 python3 train_script.py
 python3 gradio_chat_tts.py # Ram heavy
 
