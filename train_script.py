@@ -1493,11 +1493,11 @@ class RhizomeTrainer:
                     max_mem_config = None
                     if not USE_CPU_ONLY and torch.cuda.is_available():
                         gpu_mem_bytes = torch.cuda.get_device_properties(0).total_memory
-                        # Use 90% of available VRAM (leave headroom for PyTorch overhead)
-                        usable_mem_bytes = int(gpu_mem_bytes * 0.90)
+                        # Use 95% of available VRAM (leave headroom for PyTorch overhead)
+                        usable_mem_bytes = int(gpu_mem_bytes * 0.95)
                         usable_mem_gb = usable_mem_bytes / (1024**3)
                         max_mem_config = {0: f"{usable_mem_gb:.1f}GB"}
-                        logger.info(f"💾 GPU memory: {gpu_mem_bytes / (1024**3):.1f}GB total, using {usable_mem_gb:.1f}GB (90%)")
+                        logger.info(f"💾 GPU memory: {gpu_mem_bytes / (1024**3):.1f}GB total, using {usable_mem_gb:.1f}GB")
                     
                     self.model = AutoModelForCausalLM.from_pretrained(
                         self.model_name,
