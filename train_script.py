@@ -1,5 +1,5 @@
 import os
-# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with the modle you want to finetune. Models around 2b and under train fine on 6GB of VRAM using something like a GTX 1660.
+# Replace "google/gemma-3-1b-it" with modle you want to finetune
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -495,7 +495,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "google/gemma-3-1b-it-qat-int4-unquantized")
+        model_name: The model name or path (e.g., "google/gemma-3-1b-it")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -767,7 +767,7 @@ class ThemeAwareTrainer(Trainer):
 class TrainingLogger(TrainerCallback):
     """Custom callback to log and visualize training metrics with semantic tracking"""
     
-    def __init__(self, output_dir, theme_tracker: Optional[ThemeTracker] = None):
+    def __init__(self, output_dir, theme_tracker: Optional[ThemeTracker] = None, checkpoint_path: Optional[str] = None):
         self.output_dir = Path(output_dir)
         self.theme_tracker = theme_tracker
         self.metrics = {
@@ -806,11 +806,41 @@ class TrainingLogger(TrainerCallback):
             except Exception as e:
                 logger.warning(f"Could not load previous metrics: {e}")
         
+        # Also detect resuming from checkpoint path (fallback if metrics file was deleted)
+        if checkpoint_path and not self.resumed_from_checkpoint:
+            try:
+                # Extract step from checkpoint path like "checkpoint-4200"
+                ckpt_name = Path(checkpoint_path).name
+                if ckpt_name.startswith("checkpoint-"):
+                    step = int(ckpt_name.split("-")[-1])
+                    self.resumed_from_checkpoint = True
+                    self.checkpoint_start_step = step
+                    logger.info(f"📊 Detected resume from checkpoint at step {step} (no metrics file found)")
+            except (ValueError, AttributeError):
+                pass
+    
+    def set_checkpoint_info(self, checkpoint_path: str):
+        """Allow setting checkpoint info after initialization (useful when checkpoint is found later)"""
+        if checkpoint_path and not self.resumed_from_checkpoint:
+            try:
+                ckpt_name = Path(checkpoint_path).name
+                if ckpt_name.startswith("checkpoint-"):
+                    step = int(ckpt_name.split("-")[-1])
+                    self.resumed_from_checkpoint = True
+                    self.checkpoint_start_step = step
+                    logger.info(f"📊 Updated: will resume from step {step}")
+            except (ValueError, AttributeError):
+                pass
+        
     def on_train_begin(self, args, state, control, **kwargs):
         """Called at the beginning of training or when resuming"""
-        if self.resumed_from_checkpoint and state.global_step > 0:
+        # NOTE: state.global_step is 0 at this point even when resuming - 
+        # the trainer loads checkpoint state AFTER on_train_begin fires.
+        # So we rely on self.resumed_from_checkpoint flag set in __init__
+        # based on the existence of saved metrics.
+        if self.resumed_from_checkpoint and self.checkpoint_start_step > 0:
             # We're resuming from a checkpoint
-            self.checkpoint_start_step = state.global_step
+            # self.checkpoint_start_step was already set in __init__ from saved metrics
             self.checkpoint_start_time = time.time()
             logger.info(f"🔄 Resuming training from step {self.checkpoint_start_step}")
         else:
@@ -1432,7 +1462,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
+    def __init__(self, model_name="google/gemma-3-1b-it"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -1935,6 +1965,10 @@ class RhizomeTrainer:
             checkpoint_dir_path = Path(output_dir)
             last_checkpoint_path = self.find_last_checkpoint(checkpoint_dir_path)
             
+            # Update the training logger with checkpoint info if found
+            if last_checkpoint_path:
+                training_logger.set_checkpoint_info(last_checkpoint_path)
+            
             # WARNING: If resuming with different quantization settings, clear checkpoints
             if last_checkpoint_path and USE_QLORA:
                 logger.warning("⚠️ Found existing checkpoint, but QLoRA is enabled.")
@@ -2056,7 +2090,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
+    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it")
     
     try:
         # Call the main training function with desired parameters
