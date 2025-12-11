@@ -29,12 +29,12 @@ OOM Issues adjust these in train_script.py:
 
 default_batch_size = 2 # Doubles activation memory but Faster.
 default_grad_accum = 8 # Increases the effective batch → more time, not more VRAM/RAM.
+```
 ---
-
+```
 The fine tune stops when it hits the set Epoch (default 3) or when all themes have been seen. 
 
 To adjust Theme stopping look for:
 
 metrics['coverage'] >= 1.0:
-
 ```
