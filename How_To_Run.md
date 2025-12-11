@@ -11,7 +11,7 @@ rm -rf data_finetune/tokenized_cache
 python3 train_script.py
 python3 gradio_chat_tts.py # Ram heavy
 
-# For STT to work with graio download and unzip this pack. That will download the largest one but smaller more memory friendly ones are available
+# For STT to work with graio download and unzip this pack. This will download the largest one but smaller more memory friendly ones are available
 
 wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.42-gigaspeech.zip
 unzip vosk-model-en-us-0.42-gigaspeech.zip
