@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EmbeddingConfig:
     """Configuration for the embedding process"""
-    model_name: str = 'all-MiniLM-L6-v2'
+    model_name: str = 'all-MiniLM-L12-v2'
     batch_size: int = 32
     chunk_size: int = 512
     max_chunk_overlap: int = 50
