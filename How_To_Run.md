@@ -89,9 +89,9 @@ deactivate
 Modify these lines in `train_script.py`:
 
 ```python
-default_batch_size = 2   # Higher value faster but higher activation memory. Use 1 for lowest memory footprint.
-default_grad_accum = 8   # Effective batch = batch_size × grad_accum. 
-                         # Affects speed, not memory. Default target: 16 (e.g., 4x4, 2×8, 1×16).
+default_batch_size = 2   # Higher value = faster training, but higher activation memory. Use 1 for the lowest memory footprint.
+default_grad_accum = 8   # Effective batch = batch_size × grad_accum.
+                         # Affects speed, not memory. Default target: 16 (e.g., 4×4, 2×8, 1×16).
 ```
 
 ---
