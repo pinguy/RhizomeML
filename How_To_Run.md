@@ -89,8 +89,9 @@ deactivate
 Modify these lines in `train_script.py`:
 
 ```python
-default_batch_size = 2   # Faster but uses more activation memory.
-default_grad_accum = 8   # Larger effective batch; increases time, not VRAM/RAM.
+default_batch_size = 2   # Faster but higher activation memory. Use 1 for lowest memory footprint.
+default_grad_accum = 8   # Effective batch = batch_size × grad_accum. 
+                         # Affects speed, not memory. Default target: 16 (e.g., 4x4, 2×8, 1×16).
 ```
 
 ---
