@@ -22,7 +22,7 @@ python3 -m deepspeed.env_report
 python3 pdf_to_json.py
 ```
 
-### **Embedding Stage**
+### **Embedding Stage** : **Make sure you have your exported conversations.json in the root dir**
 
 ```bash
 python3 batch_embedder.py  # Defaults to CPU. Set use_gpu=True if you have CUDA.
