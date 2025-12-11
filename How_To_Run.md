@@ -1,40 +1,109 @@
-```
+# **RhizomeML – Setup & Workflow**
+
+```bash
 git clone https://github.com/pinguy/RhizomeML.git
 cd RhizomeML
+
 pip3 install -r requirements.txt --upgrade
+
+# Install DeepSpeed (CPU-optimized build)
 DS_SKIP_CUDA_CHECK=1 DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip3 install deepspeed
+
+# Check the DeepSpeed environment:
 python3 -m deepspeed.env_report
+# Adam should be enabled. ZeRO-Offload is mostly configured but disabled by default.
+```
+
+---
+
+## **Data Preparation**
+
+```bash
 python3 pdf_to_json.py
-python3 batch_embedder.py # use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
-python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid # Using a compatible GPU remove --force-cpu
-rm -rf data_finetune/tokenized_cache # Removes the semantic themes arrow. If retraining the same base mode don't have to remove but ig you get an error its probably due to that.
+```
+
+### **Embedding Stage**
+
+```bash
+python3 batch_embedder.py  # Defaults to CPU. Set use_gpu=True if you have CUDA.
+```
+
+### **Semantic Processing**
+
+```bash
+python3 data_formatter.py \
+    --force-cpu \
+    --enable-semantic-labeling \
+    --semantic-mode normal \
+    --semantic-method hybrid
+# Remove --force-cpu when using a compatible GPU.
+```
+
+If you retrain on the same base model and hit metadata errors, clear the cached tokenization:
+
+```bash
+rm -rf data_finetune/tokenized_cache
+```
+
+---
+
+## **Training**
+
+```bash
 python3 train_script.py
-python3 gradio_chat_tts.py # Ram heavy
+```
 
-# For STT to work with graio download and unzip this pack. This will download the largest one but smaller more memory friendly ones are available
+---
 
+## **Gradio Chat + TTS (RAM heavy)**
+
+```bash
+python3 gradio_chat_tts.py
+```
+
+### **STT Setup (Vosk)**
+
+Gradio STT requires a speech model. Download the large pack below (smaller ones also work):
+
+```bash
 wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.42-gigaspeech.zip
 unzip vosk-model-en-us-0.42-gigaspeech.zip
+```
 
-# Once happy can be turned into a GGUF for llama
+---
+
+## **Convert the Final Model to GGUF (for llama.cpp)**
+
+```bash
 python3 -m venv venv_gguf
 source venv_gguf/bin/activate
 pip3 install peft
 python3 convert_to_gguf.py
 deactivate
 ```
+
 ---
-```
-OOM Issues adjust these in train_script.py:
 
-default_batch_size = 2 # Doubles activation memory but Faster.
-default_grad_accum = 8 # Increases the effective batch → more time, not more VRAM/RAM.
+# **OOM Adjustments**
+
+Modify these lines in `train_script.py`:
+
+```python
+default_batch_size = 2   # Faster but uses more activation memory.
+default_grad_accum = 8   # Larger effective batch; increases time, not VRAM/RAM.
 ```
+
 ---
-```
-The fine tune stops when it hits the set Epoch (default 3) or when all themes have been seen. 
 
-To adjust Theme stopping look for:
+# **Theme-Based Early Stopping**
 
-metrics['coverage'] >= 1.0:
+Training ends when either:
+
+* The epoch limit is reached (default: 3), **or**
+* All semantic themes have been observed.
+
+To adjust the early-stopping rule, look for:
+
+```python
+metrics['coverage'] >= 1.0
 ```
