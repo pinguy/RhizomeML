@@ -1,5 +1,5 @@
 import os
-# Replace "googlegoogle/gemma-3-1b-it" with modle you want to finetune
+# Replace "googlegoogle/gemma-3-1b-it" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
