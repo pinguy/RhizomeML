@@ -663,6 +663,7 @@ class ThemeAwareTrainer(Trainer):
         self.theme_tracker = theme_tracker
         self.original_dataset = original_dataset
         self.original_dataset_size = len(original_dataset) if original_dataset else 0
+        self._last_logged_step = -1  # Track last logged step to avoid duplicates during gradient accumulation
         if not theme_tracker:
             logger.warning("ThemeAwareTrainer initialized without a ThemeTracker!")
         if not original_dataset:
@@ -707,14 +708,55 @@ class ThemeAwareTrainer(Trainer):
                 # Record the themes
                 self.theme_tracker.record_batch_themes(batch_themes, is_training=True)
 
-                # Log diversity metrics every 100 steps (as per user's prompt)
-                if self.state.global_step > 0 and self.state.global_step % 100 == 0:
-                    metrics = self.theme_tracker.get_diversity_metrics(is_training=True)
+                # Get current metrics
+                metrics = self.theme_tracker.get_diversity_metrics(is_training=True)
+                
+                # Log diversity metrics every 100 steps
+                # Use _last_logged_step to prevent duplicate logging during gradient accumulation
+                current_step = self.state.global_step
+                should_log = (current_step > 0 and 
+                             current_step % 100 == 0 and 
+                             current_step != self._last_logged_step)
+                
+                if should_log:
+                    self._last_logged_step = current_step
                     self.log({
                         "train_theme_entropy": metrics['entropy'],
                         "train_theme_coverage": metrics['coverage'],
                         "train_unique_themes": metrics['unique_themes']
                     })
+                
+                # Check for early stopping - more frequently as we approach 100%
+                # Only check once per step (not during each gradient accumulation sub-step)
+                if current_step != getattr(self, '_last_coverage_check_step', -1):
+                    check_threshold = False
+                    if metrics['coverage'] >= 0.95:
+                        # Check every step when we're close
+                        check_threshold = True
+                    elif metrics['coverage'] >= 0.90:
+                        # Check every 10 steps when we're getting close
+                        check_threshold = (current_step % 10 == 0)
+                    elif current_step % 100 == 0:
+                        # Otherwise check every 100 steps
+                        check_threshold = True
+                    
+                    if check_threshold:
+                        self._last_coverage_check_step = current_step
+                        
+                        if metrics['coverage'] >= 1.0:
+                            logger.info("\n" + "="*70)
+                            logger.info("🎯 THEME COVERAGE REACHED 100%! STOPPING TRAINING...")
+                            logger.info("="*70)
+                            logger.info(f"   • Step: {current_step}")
+                            logger.info(f"   • Epoch: {self.state.epoch:.2f}")
+                            logger.info(f"   • Unique themes seen: {metrics['unique_themes']}")
+                            logger.info(f"   • Total known themes: {len(self.theme_tracker.global_theme_dist)}")
+                            logger.info(f"   • Shannon entropy: {metrics['entropy']:.3f}")
+                            logger.info(f"   • Total theme occurrences: {metrics['total_occurrences']:,}")
+                            logger.info("="*70 + "\n")
+                            
+                            # Set should_training_stop flag to trigger graceful stop
+                            self.control.should_training_stop = True
 
             except Exception as e:
                 # Don't crash training if theme tracking fails
@@ -745,7 +787,38 @@ class TrainingLogger(TrainerCallback):
             'eval_theme_coverage': [],
         }
         self.start_time = time.time()
+        self.resumed_from_checkpoint = False
+        self.checkpoint_start_step = 0
+        self.checkpoint_start_time = None
         
+        # Try to load existing metrics if resuming
+        metrics_file = self.output_dir / "training_metrics.json"
+        if metrics_file.exists():
+            try:
+                with open(metrics_file, 'r') as f:
+                    saved_metrics = json.load(f)
+                    # Restore metrics from saved file
+                    self.metrics = saved_metrics
+                    self.resumed_from_checkpoint = True
+                    if self.metrics['step']:
+                        self.checkpoint_start_step = max(self.metrics['step'])
+                    logger.info(f"📊 Loaded previous metrics up to step {self.checkpoint_start_step}")
+            except Exception as e:
+                logger.warning(f"Could not load previous metrics: {e}")
+        
+    def on_train_begin(self, args, state, control, **kwargs):
+        """Called at the beginning of training or when resuming"""
+        if self.resumed_from_checkpoint and state.global_step > 0:
+            # We're resuming from a checkpoint
+            self.checkpoint_start_step = state.global_step
+            self.checkpoint_start_time = time.time()
+            logger.info(f"🔄 Resuming training from step {self.checkpoint_start_step}")
+        else:
+            # Fresh training start
+            self.start_time = time.time()
+            self.checkpoint_start_time = self.start_time
+            logger.info("🆕 Starting fresh training run")
+    
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         """Called when logging occurs"""
         if logs is None:
@@ -811,7 +884,25 @@ class TrainingLogger(TrainerCallback):
                 self.metrics['train_theme_coverage'].append(logs['train_theme_coverage'])
         # --- END PATCH ---
                 
-        # Performance metrics
+        # Performance metrics - calculate properly when resuming
+        if 'train_runtime' in logs or 'train_samples_per_second' in logs or 'train_steps_per_second' in logs:
+            # Calculate speeds based on time since checkpoint if resuming
+            if self.checkpoint_start_time and current_step > self.checkpoint_start_step:
+                elapsed_time = time.time() - self.checkpoint_start_time
+                steps_since_checkpoint = current_step - self.checkpoint_start_step
+                
+                # Calculate actual speeds since resume
+                if elapsed_time > 0:
+                    actual_steps_per_second = steps_since_checkpoint / elapsed_time
+                    actual_samples_per_second = actual_steps_per_second * args.train_batch_size
+                    
+                    # Override the reported speeds with our calculated ones
+                    if 'train_steps_per_second' in logs:
+                        logs['train_steps_per_second'] = actual_steps_per_second
+                    if 'train_samples_per_second' in logs:
+                        logs['train_samples_per_second'] = actual_samples_per_second
+        
+        # Store performance metrics
         for key in ['train_runtime', 'train_samples_per_second', 'train_steps_per_second']:
             if key in logs:
                 if len(self.metrics[key]) < len(self.metrics['step']):
@@ -1398,11 +1489,22 @@ class RhizomeTrainer:
                         bnb_4bit_use_double_quant=True,
                     )
                     
+                    # Calculate max memory dynamically from GPU info
+                    max_mem_config = None
+                    if not USE_CPU_ONLY and torch.cuda.is_available():
+                        gpu_mem_bytes = torch.cuda.get_device_properties(0).total_memory
+                        # Use 90% of available VRAM (leave headroom for PyTorch overhead)
+                        usable_mem_bytes = int(gpu_mem_bytes * 0.90)
+                        usable_mem_gb = usable_mem_bytes / (1024**3)
+                        max_mem_config = {0: f"{usable_mem_gb:.1f}GB"}
+                        logger.info(f"💾 GPU memory: {gpu_mem_bytes / (1024**3):.1f}GB total, using {usable_mem_gb:.1f}GB (90%)")
+                    
                     self.model = AutoModelForCausalLM.from_pretrained(
                         self.model_name,
                         quantization_config=bnb_config,
                         device_map="auto" if not USE_CPU_ONLY else "cpu",
                         low_cpu_mem_usage=True,
+                        max_memory=max_mem_config,
                     )
                     
                     # Prepare model for k-bit training
@@ -1569,7 +1671,7 @@ class RhizomeTrainer:
             tokenize_function,
             batched=True,
             batch_size=1000,
-            num_proc=1 if USE_CPU_ONLY else 0,
+            num_proc=1 if USE_CPU_ONLY else None,
             remove_columns=original_columns, # <-- FIX 1: Add this line
             desc="Tokenizing"
         )
