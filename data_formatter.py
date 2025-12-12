@@ -251,36 +251,31 @@ class Config:
 # ============================================================================
 
 def clean_text(text: str) -> str:
+    """Robust text cleaning function."""
     text = ftfy.fix_encoding(text)
     text = ftfy.fix_text(text)
-
-    # Remove zero-width junk
+    #text = re.sub(r'[ \t]+', ' ', text)
+    #text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
-
-    # Fix hyphenated line breaks from PDFs
-    text = re.sub(r'(\w)-\n(\w)', r'\1\2', text)
-
-    # Normalize Windows/Mac newlines
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-
-    # Collapse SINGLE newlines (PDF line wraps) → space
-    text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
-
-    # Clamp excessive paragraph breaks
-    text = re.sub(r'\n{3,}', '\n\n', text)
-
-    # Quote / OCR cleanup (safe)
+    text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
+    #text = re.sub(r'\s*\n\s*', ' ', text)
     text = re.sub(r'\b"(\w+)"\b', r'\1', text)
     text = re.sub(r'"([^"]+[.,!?])"', r'\1', text)
+    text = re.sub(r'"([A-Z][^"]*?)"(?=\s|$)', r'\1', text)
     text = re.sub(r'\\(["\'])', r'\1', text)
-
-    # OCR number garbage
+    while '\\\"' in text or "\\\'" in text:
+        text = text.replace('\\\"', '"').replace("\\\'", "'")
+    text = re.sub(r'\*+"', '"', text)
+    text = re.sub(r'"\*+', '"', text)
+    text = re.sub(r'\*\s*"', ' *"', text)
+    text = re.sub(r'"\s*\*', '"* ', text)
+    text = re.sub(r"(?i)\b([a-z]+)9(?=(?:t|s|m|re|ve|ll|d)\b)", r"\1'", text)
+    text = re.sub(r"(?i)(?<=in)9(?=\b|[^a-z])", "g", text)
+    text = re.sub(r"(?i)\b([a-z]{2,})9(?=s\b)", r"\1'", text)
+    text = re.sub(r'([!?.,]){2,}["\']', r'\1"', text)
+    text = re.sub(r' {2,}', ' ', text)
     text = re.sub(r'\b9em\b', 'em', text)
     text = re.sub(r'(?<!\d)9(?!\d)', '', text)
-
-    # Final whitespace tidy (NOT touching newlines)
-    text = re.sub(r'[ \t]{2,}', ' ', text)
-
     return text.strip()
 
 def validate_text(text: str, cfg: Config) -> bool:
