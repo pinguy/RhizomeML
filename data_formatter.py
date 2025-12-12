@@ -258,7 +258,7 @@ def clean_text(text: str) -> str:
     #text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
     text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
-    text = re.sub(r'\s*\n\s*', ' ', text)
+    #text = re.sub(r'\s*\n\s*', ' ', text)
     text = re.sub(r'\b"(\w+)"\b', r'\1', text)
     text = re.sub(r'"([^"]+[.,!?])"', r'\1', text)
     text = re.sub(r'"([A-Z][^"]*?)"(?=\s|$)', r'\1', text)
