@@ -50,7 +50,6 @@ python3 data_formatter.py \
     --enable-semantic-labeling \
     --semantic-mode normal \
     --semantic-method hybrid
-# Remove --force-cpu when using a compatible GPU.
 ```
 
 ---
