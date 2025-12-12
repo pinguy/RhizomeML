@@ -970,12 +970,20 @@ class ImprovedBatchEmbedder:
 
 def main():
     """Main execution function with CPU/GPU optimization and progress indication"""
+    
+    # Auto-detect GPU availability
+    gpu_available = torch.cuda.is_available()
+    if gpu_available:
+        logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}. Enabling GPU acceleration.")
+    else:
+        logger.info("⚠️ No compatible GPU detected. Falling back to CPU.")
+
     config = EmbeddingConfig(
         batch_size=64,
         chunk_size=400,
         max_chunk_overlap=50,
         min_text_length=15, # Adjusted
-        use_gpu=False,  # Set to True if you have a compatible GPU (CUDA)
+        use_gpu=gpu_available,  # Auto-selected based on detection
         index_type='flat',
         deduplication=True,
         min_sentence_length=5, # Adjusted
