@@ -47,7 +47,6 @@ python3 batch_embedder.py
 
 ```bash
 python3 data_formatter.py \
-    --force-cpu \
     --enable-semantic-labeling \
     --semantic-mode normal \
     --semantic-method hybrid
