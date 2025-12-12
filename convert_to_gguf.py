@@ -545,7 +545,7 @@ SERVER="{server_bin}"
 if [ ! -f "$SERVER" ]; then
     echo "Error: llama-server not found at $SERVER"
     echo "Please build llama.cpp first:"
-    echo "  cd {llama_cpp_dir} && cmake -B build -DLLAMA_CURL=OFF && cmake --build build --config Release -j$(nproc)"
+    echo "  cd {llama_cpp_dir} && cmake -B build -DGGML_CUDA=ON -DLLAMA_CURL=ON && cmake --build build --config Release -j$(nproc)"
     exit 1
 fi
 
@@ -564,8 +564,8 @@ echo ""
 echo "Server will be available at: http://localhost:8080"
 echo ""
 
-# Default: Hybrid mode for your 1660 Ti + Xeon setup
-"$SERVER" -m "$MODEL" -c 8192 -ngl 99 -ot "*attn.*=GPU,*ffn_.*=CPU" --threads 14
+# Default: Hybrid mode
+"$SERVER" -m "$MODEL" -c 8192 -ngl 99 -ot "*attn.*=GPU,*ffn_.*=CPU" --threads 14 --port 8081
 '''
     
     with open(script_path, 'w') as f:
@@ -822,7 +822,7 @@ Quantization options (smallest to largest):
     if server_bin:
         logger.info(f"  {server_bin} -m {final_gguf} -c 8192 -ngl 99")
         logger.info("")
-        logger.info("For your 1660 Ti + Xeon (hybrid offload):")
+        logger.info("For (hybrid offload):")
         logger.info(f"  {server_bin} -m {final_gguf} -c 8192 -ngl 99 \\")
         logger.info('    -ot "*attn.*=GPU,*ffn_.*=CPU" --threads 14')
     else:
