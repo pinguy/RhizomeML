@@ -39,7 +39,6 @@ Only `conversations.json` is required — if it’s missing, the conversation-em
 
 ```bash
 python3 batch_embedder.py
-# Defaults to CPU. Set use_gpu=True if you have CUDA.
 ```
 
 ---
