@@ -104,7 +104,7 @@ source venv_gguf/bin/activate
 
 pip3 install peft
 python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
-python3 convert_to_gguf.py --quant f16  # No quantization - But can go as small as q2_k - 2-bit (smallest, noticeable quality loss)
+python3 convert_to_gguf.py --quant f16  # No quantization - But can go as small as q2_k - 2-bit
 
 deactivate
 ```
