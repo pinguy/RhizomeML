@@ -2022,7 +2022,7 @@ class RhizomeTrainer:
             if last_checkpoint_path:
                 logger.info(f"🔄 Resuming training from checkpoint: {last_checkpoint_path}")
                 logger.info("⏳ First step with QLoRA may take 5-10 minutes to initialize...")
-                logger.info("💡 You should see CPU activity in htop or nvtop - if not, something is wrong")
+                logger.info("💡 You should see activity in htop or nvtop - if not, something is wrong")
                 
                 # Restore theme tracker state if available
                 theme_state_path = Path(last_checkpoint_path) / 'theme_tracker_state.json'
@@ -2054,7 +2054,7 @@ class RhizomeTrainer:
             else:
                 logger.info("🎯 Starting fresh training run...")
                 logger.info("⏳ First step with QLoRA may take 5-10 minutes to initialize...")
-                logger.info("💡 You should see CPU activity in htop - if not, something is wrong")
+                logger.info("💡 You should see activity in htop or nvtop - if not, something is wrong")
                 logger.info("🚀 Starting training loop (patience, initialization can be slow)...")
                 trainer.train()
             
