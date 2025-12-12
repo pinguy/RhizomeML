@@ -606,51 +606,61 @@ class ThemeTracker:
 def create_theme_weighted_sampler(dataset, theme_tracker: ThemeTracker) -> Optional[WeightedRandomSampler]:
     """
     Create a weighted sampler that oversamples underrepresented themes.
-    
-    Args:
-        dataset: HuggingFace dataset with 'source_metadata' containing themes
-        theme_tracker: ThemeTracker instance with theme weights
-    
-    Returns:
-        WeightedRandomSampler or None if theme data not available
     """
     try:
         weights = []
         missing_metadata = 0
-        
+
         for example in dataset:
-            # Try to extract themes from various possible locations
             themes = None
-            
-            if 'source_metadata' in example and example['source_metadata']:
-                metadata = example['source_metadata']
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except:
-                        pass
-                
-                if isinstance(metadata, dict):
-                    themes = metadata.get('themes', metadata.get('phrase_themes', []))
-            
+
+            metadata = example.get("source_metadata")
+
+            # Parse metadata if needed
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = None
+
+            if isinstance(metadata, dict):
+                # Priority order (most specific → most general)
+                themes = (
+                    metadata.get("themes")
+                    or metadata.get("semantic_themes")
+                    or metadata.get("phrase_themes")
+                )
+
+                # Fallback: extract from nested convo metadata
+                if not themes:
+                    user_msg = metadata.get("user_msg", {})
+                    assistant_msg = metadata.get("assistant_msg", {})
+
+                    themes = (
+                        user_msg.get("semantic_themes")
+                        or assistant_msg.get("semantic_themes")
+                    )
+
+            # Final fallback
             if not themes:
-                themes = ['general']
+                themes = ["general"]
                 missing_metadata += 1
-            
+
             weight = theme_tracker.get_sample_weight(themes)
             weights.append(weight)
-        
+
         if missing_metadata > 0:
-            logger.warning(f"⚠️ {missing_metadata}/{len(dataset)} examples missing theme metadata")
-        
-        if not weights:
-             logger.warning("⚠️ No weights generated for sampler.")
-             return None
-             
-        logger.info(f"📊 Sample weights - min: {min(weights):.3f}, max: {max(weights):.3f}, mean: {np.mean(weights):.3f}")
-        
+            logger.warning(
+                f"⚠️ {missing_metadata}/{len(dataset)} examples missing theme metadata"
+            )
+
+        logger.info(
+            f"📊 Sample weights - min: {min(weights):.3f}, "
+            f"max: {max(weights):.3f}, mean: {np.mean(weights):.3f}"
+        )
+
         return WeightedRandomSampler(weights, len(weights), replacement=True)
-    
+
     except Exception as e:
         logger.warning(f"⚠️ Could not create weighted sampler: {e}")
         return None
