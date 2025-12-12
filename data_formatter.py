@@ -255,7 +255,7 @@ def clean_text(text: str) -> str:
     text = ftfy.fix_encoding(text)
     text = ftfy.fix_text(text)
     text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    #text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
     text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
     text = re.sub(r'\s*\n\s*', ' ', text)
