@@ -18,7 +18,7 @@ import time
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "true" if os.cpu_count() > 6 else "false"
 from pathlib import Path
-from functools import partial
+from functools import partial, lru_cache
 from typing import List, Dict, Tuple, Optional, Any, Set
 from dataclasses import dataclass, field
 from collections import defaultdict, Counter
@@ -254,7 +254,7 @@ def clean_text(text: str) -> str:
     """Robust text cleaning function."""
     text = ftfy.fix_encoding(text)
     text = ftfy.fix_text(text)
-    #text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'[ \t]+', ' ', text)
     #text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
     text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
@@ -530,10 +530,10 @@ class SemanticLabeler:
     """Enhanced labeler with phrase/word separation and incremental TF-IDF"""
     
     FALLBACK_STOPWORDS = {
-        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+        'like', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
         'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
         'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
-        'would', 'should', 'could', 'may', 'might', 'must', 'can', 'shall'
+        'would', 'should', 'could', 'may', 'might', 'must', 'can', 'shall', 'let'
     }
     
     def __init__(self, cfg: Config, embedding_model=None):
@@ -1076,6 +1076,9 @@ class OptimizedDataProcessor:
         # Initialize components
         self.qual_scorer = QualityScorer(config, self.model)
         self.labeler = SemanticLabeler(config, self.model) if config.enable_semantic_labeling else None
+        
+        if self.use_semantic_filtering:
+            self._get_single_embedding = lru_cache(maxsize=self.config.embedding_cache_size)(self.__get_single_embedding_uncached)
 
     def _load_embedding_model(self) -> None:
         logger.info("Loading SentenceTransformer model for semantic filtering...")
@@ -1089,43 +1092,76 @@ class OptimizedDataProcessor:
             self.use_semantic_filtering = False
             logger.warning("Disabling semantic filtering due to model loading failure.")
 
-    def _compute_embeddings_batch(self, texts: List[str]) -> np.ndarray:
-        """Compute embeddings in strict batches for GPU efficiency"""
+    def __get_single_embedding_uncached(self, text: str) -> np.ndarray:
+        """Helper to compute a single embedding (uncached version)"""
         if not self.use_semantic_filtering or not self.model:
             return np.array([])
         
-        if not texts:
-            return np.array([])
-
-        all_embeddings = []
-        
-        # Disable tokenizers parallelism to avoid deadlocks in some environments
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
-        
-        # Process in chunks to respect batch size and GPU memory
-        total_texts = len(texts)
-        logger.info(f"Computing embeddings for {total_texts} texts in batches of {self.config.batch_size}...")
-        
-        for i in tqdm(range(0, total_texts, self.config.batch_size), desc="Embedding Batches"):
-            batch = texts[i : i + self.config.batch_size]
+        for attempt in range(self.config.embedding_retry_attempts):
             try:
-                # This will use the GPU if self.model.device is 'cuda'
-                embeddings = self.model.encode(
-                    batch, 
+                embedding = self.model.encode(
+                    text, 
                     convert_to_numpy=True, 
                     normalize_embeddings=True,
-                    show_progress_bar=False,
-                    batch_size=len(batch)
+                    show_progress_bar=False
                 )
-                all_embeddings.append(embeddings)
+                return embedding
             except Exception as e:
-                logger.error(f"Error embedding batch {i // self.config.batch_size}: {e}")
-                # Fallback: return zero vectors for this batch to maintain alignment
-                all_embeddings.append(np.zeros((len(batch), self.config.embedding_dim)))
+                if attempt < self.config.embedding_retry_attempts - 1:
+                    logger.warning(f"Embedding failed (attempt {attempt+1}): {e}. Retrying...")
+                    time.sleep(self.config.embedding_retry_delay * (2 ** attempt))
+                else:
+                    logger.warning(f"Failed to compute embedding for text: {text[:50]}... Error: {e}")
+                    return np.zeros(self.config.embedding_dim)
+        return np.zeros(self.config.embedding_dim)
 
-        if all_embeddings:
-            return np.vstack(all_embeddings)
-        return np.array([])
+    def _compute_embeddings_batch(self, texts: List[str]) -> np.ndarray:
+        """Compute embeddings in batches, utilizing cache for individual texts"""
+        if not self.use_semantic_filtering or not self.model:
+            return np.array([])
+        
+        cached_embeddings, texts_to_encode, original_indices = [], [], []
+        
+        progress_bar = tqdm(total=len(texts), desc="Embedding All Texts", dynamic_ncols=True, mininterval=0.5)
+
+        for i, text in enumerate(texts):
+            try:
+                embedding = self._get_single_embedding(text)
+                if embedding.size > 0:
+                    cached_embeddings.append((i, embedding))
+                    progress_bar.update(1)
+                else:
+                    texts_to_encode.append(text)
+                    original_indices.append(i)
+            except Exception:
+                texts_to_encode.append(text)
+                original_indices.append(i)
+        
+        new_embeddings = []
+        if texts_to_encode:
+            logger.info(f"Encoding {len(texts_to_encode)} new texts (not in cache)...") 
+            for i in range(0, len(texts_to_encode), self.config.batch_size):
+                batch = texts_to_encode[i:i + self.config.batch_size]
+                try:
+                    batch_embeddings = self.model.encode(
+                        batch, convert_to_numpy=True, normalize_embeddings=True,
+                        show_progress_bar=False, batch_size=len(batch)
+                    )
+                    for j, emb in enumerate(batch_embeddings):
+                        original_idx = original_indices[i + j]
+                        new_embeddings.append((original_idx, emb))
+                        progress_bar.update(1)
+                except Exception as e:
+                    logger.warning(f"Failed to compute embeddings for batch {i//self.config.batch_size}: {e}")
+                    for j in range(len(batch)):
+                        original_idx = original_indices[i+j]
+                        new_embeddings.append((original_idx, np.zeros(self.config.embedding_dim)))
+                        progress_bar.update(1)
+        
+        progress_bar.close()
+        
+        all_embeddings_with_indices = sorted(cached_embeddings + new_embeddings, key=lambda x: x[0])
+        return np.vstack([emb for idx, emb in all_embeddings_with_indices]) if all_embeddings_with_indices else np.array([])
 
     # ========================================================================
     # LOAD MEMORY TEXTS
@@ -1213,7 +1249,6 @@ class OptimizedDataProcessor:
             return valid_entries
         
         logger.info("Computing embeddings for semantic deduplication...")
-        # Now uses the optimized batch function
         embeddings = self._compute_embeddings_batch(valid_texts)
         
         if embeddings.size == 0 or len(embeddings) != len(valid_texts):
@@ -1649,16 +1684,6 @@ def parse_args() -> Config:
 def main(cfg: Config):
     """Main processing pipeline - Memory Texts Only"""
     
-    # Auto-detect GPU availability (Added logic)
-    gpu_available = torch.cuda.is_available()
-    if gpu_available:
-        if cfg.force_cpu:
-             logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}, but --force-cpu is set. Using CPU.")
-        else:
-             logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}. Enabling GPU acceleration.")
-    else:
-        logger.info("⚠️ No compatible GPU detected. Falling back to CPU.")
-    
     logger.info("=" * 70)
     logger.info("MEMORY TEXTS DATA FORMATTER")
     logger.info("=" * 70)
@@ -1807,3 +1832,5 @@ def main(cfg: Config):
 if __name__ == "__main__":
     config = parse_args()
     main(config)
+
+        
