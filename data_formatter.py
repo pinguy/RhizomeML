@@ -34,8 +34,6 @@ try:
     try:
         find('tokenizers/punkt_tab')
         find('corpora/stopwords')
-        find('corpora/wordnet.zip')
-        find('corpora/omw-1.4.zip')
         from nltk.corpus import stopwords
         NLTK_STOPWORDS = set(stopwords.words('english'))
         print(f"✓ NLTK loaded with {len(NLTK_STOPWORDS)} stopwords")
@@ -43,8 +41,6 @@ try:
         print("Downloading NLTK resources...")
         nltk.download('punkt_tab', quiet=True)
         nltk.download('stopwords', quiet=True)
-        nltk.download('wordnet', quiet=True)
-        nltk.download('omw-1.4', quiet=True)
         from nltk.corpus import stopwords
         NLTK_STOPWORDS = set(stopwords.words('english'))
     NLTK_AVAILABLE = True
