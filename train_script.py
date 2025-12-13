@@ -628,7 +628,7 @@ def create_theme_weighted_sampler(dataset, theme_tracker: ThemeTracker) -> Optio
                 themes = (
                     metadata.get("themes")
                     or metadata.get("semantic_themes")
-                    or metadata.get("phrase_themes")
+                    or metadata.get("primary_theme")
                 )
 
                 # Fallback: extract from nested convo metadata
@@ -718,7 +718,7 @@ class ThemeAwareTrainer(Trainer):
                                 metadata = {}
                         
                         if isinstance(metadata, dict):
-                            themes = metadata.get('themes', metadata.get('phrase_themes', ['general']))
+                            themes = metadata.get('themes', metadata.get('primary_theme', ['general']))
                             if not themes:
                                 themes = ['general']
                     
@@ -1631,7 +1631,7 @@ class RhizomeTrainer:
                 lora_alpha=16,
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
-                bias="none", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
+                bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
                 task_type=TaskType.CAUSAL_LM,
                 fan_in_fan_out=fan_in_fan_out
             )
