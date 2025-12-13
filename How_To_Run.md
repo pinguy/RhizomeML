@@ -50,6 +50,7 @@ python3 data_formatter.py \
     --enable-semantic-labeling \
     --semantic-mode normal \
     --semantic-method hybrid
+# Add --force-cpu to use the CPU.
 ```
 
 ---
