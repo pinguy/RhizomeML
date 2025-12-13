@@ -300,10 +300,10 @@ def optimize_torch_settings(device: torch.device, cpu_cores: int):
     elif device.type == "mps":
         logger.info("🔧 Configuring MPS optimizations...")
     else:
-        logger.info("🔧 Configuring CPU optimizations...")
-        optimal_threads = max(1, min(cpu_cores - 1, 8))
-        torch.set_num_threads(optimal_threads)
-        torch.set_num_interop_threads(optimal_threads)
+        logger.info(f"🔧 Configuring CPU optimizations (Using all {cpu_cores} detected cores)...")
+        # Use ALL available cores as requested, instead of capping at 8
+        torch.set_num_threads(cpu_cores)
+        torch.set_num_interop_threads(cpu_cores)
         
         if hasattr(torch.backends, 'mkldnn'):
             torch.backends.mkldnn.enabled = True
@@ -812,7 +812,8 @@ class ChatTemplateHandler:
                 formatted = self.tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
-                    add_generation_prompt=True
+                    add_generation_prompt=True,
+                    enable_thinking=False
                 )
                 return formatted
             except Exception as e:
@@ -2471,6 +2472,13 @@ def main():
     """Main function"""
     logger.info("🚀 Starting Model-Agnostic UCS-Enhanced Rhizome Chat Interface...")
     
+    # Auto-detect GPU availability logic similar to previous files
+    gpu_available = torch.cuda.is_available()
+    if gpu_available:
+         logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}. Enabling GPU acceleration.")
+    else:
+        logger.info("⚠️ No compatible GPU detected. Falling back to CPU (Using all available cores).")
+
     # Check if necessary directories exist
     os.makedirs(config.base_dir, exist_ok=True)
     
