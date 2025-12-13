@@ -1631,7 +1631,7 @@ class RhizomeTrainer:
                 lora_alpha=16,
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
-                bias="none",
+                bias="none", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
                 task_type=TaskType.CAUSAL_LM,
                 fan_in_fan_out=fan_in_fan_out
             )
