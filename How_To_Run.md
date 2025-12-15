@@ -74,10 +74,12 @@ Set the base model in `train_script.py`:
 
 ```python
 model_name = "google/gemma-3-1b-it-qat-int4-unquantized"  # Any Hugging Face CAUSAL_LM model
-# Note:
-# - Training requires int4 / NF4 quantization. q4_0 models are inference-only.
-# - Some models require a Hugging Face access token to download.
-#   Set "HF_TOKEN" in the script to your token if needed.
+```
+Note:
+- Training requires int4 / NF4 quantization. q4_0 models are inference-only.
+- Some models require a Hugging Face access token to download.
+- Set "HF_TOKEN" in the script to your token if needed.
+
 ---
 
 ## **Gradio Chat + TTS (RAM Heavy)**
