@@ -291,6 +291,29 @@ def get_optimal_device_config() -> Tuple[torch.device, str, Dict]:
             
     return device, device_info, details
 
+def apply_cpu_optimizations():
+    """Apply aggressive CPU optimizations when forced to use CPU"""
+    cpu_count = multiprocessing.cpu_count()
+    optimal_threads = max(1, cpu_count - 1)
+    
+    logger.info("⚡ Applying aggressive CPU optimizations...")
+    
+    # 1. Thread affinity and core pinning
+    torch.set_num_threads(optimal_threads)
+    torch.set_num_interop_threads(4)  # Keep low for stability
+    
+    # 2. Environment variable overrides
+    os.environ.update({
+        "OMP_NUM_THREADS": str(optimal_threads),
+        "MKL_NUM_THREADS": "1",  # Avoid nested parallelism
+        "KMP_AFFINITY": "granularity=fine,compact,1,0",
+        "KMP_BLOCKTIME": "1",
+    })
+    
+    logger.info(f"   - Threads: {optimal_threads}")
+    logger.info(f"   - OMP_NUM_THREADS: {optimal_threads}")
+    logger.info(f"   - MKL_NUM_THREADS: 1")
+
 def optimize_torch_settings(device: torch.device, cpu_cores: int):
     """Optimize PyTorch settings"""
     if device.type == "cuda":
@@ -300,10 +323,8 @@ def optimize_torch_settings(device: torch.device, cpu_cores: int):
     elif device.type == "mps":
         logger.info("🔧 Configuring MPS optimizations...")
     else:
-        logger.info(f"🔧 Configuring CPU optimizations (Using all {cpu_cores} detected cores)...")
-        # Use ALL available cores as requested, instead of capping at 8
-        torch.set_num_threads(cpu_cores)
-        torch.set_num_interop_threads(cpu_cores)
+        # Use the aggressive CPU optimization function
+        apply_cpu_optimizations()
         
         if hasattr(torch.backends, 'mkldnn'):
             torch.backends.mkldnn.enabled = True
