@@ -624,7 +624,7 @@ def create_theme_weighted_sampler(dataset, theme_tracker: ThemeTracker) -> Optio
                     metadata = None
 
             if isinstance(metadata, dict):
-                # Priority order (most specific → most general)
+                # Priority order (most specific → most general_content)
                 themes = (
                     metadata.get("themes")
                     or metadata.get("semantic_themes")
@@ -643,7 +643,7 @@ def create_theme_weighted_sampler(dataset, theme_tracker: ThemeTracker) -> Optio
 
             # Final fallback
             if not themes:
-                themes = ["general"]
+                themes = ["general_content"]
                 missing_metadata += 1
 
             weight = theme_tracker.get_sample_weight(themes)
@@ -708,7 +708,7 @@ class ThemeAwareTrainer(Trainer):
                 
                 batch_themes = []
                 for example in sampled_examples:
-                    themes = ['general'] # Default
+                    themes = ['general_content'] # Default
                     if 'source_metadata' in example and example['source_metadata']:
                         metadata = example['source_metadata']
                         if isinstance(metadata, str):
@@ -718,9 +718,9 @@ class ThemeAwareTrainer(Trainer):
                                 metadata = {}
                         
                         if isinstance(metadata, dict):
-                            themes = metadata.get('themes', metadata.get('primary_theme', ['general']))
+                            themes = metadata.get('themes', metadata.get('primary_theme', ['general_content']))
                             if not themes:
-                                themes = ['general']
+                                themes = ['general_content']
                     
                     batch_themes.append(themes)
                 
