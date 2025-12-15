@@ -454,7 +454,7 @@ def get_model_lora_targets(model):
         found_targets = []
         
         # Look for common attention projection patterns
-        attention_patterns = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'query', 'key', 'value', 'c_attn']
+        attention_patterns = ['all-linear']
         for pattern in attention_patterns:
             for module_type, module_names in all_modules.items():
                 if 'Linear' in module_type:  # Focus on Linear layers
@@ -1629,6 +1629,7 @@ class RhizomeTrainer:
             lora_config = LoraConfig(
                 r=16,
                 lora_alpha=32,
+                qalora_group_size=32,
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
                 bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
@@ -1836,7 +1837,7 @@ class RhizomeTrainer:
             "warmup_steps": 100,
             "logging_steps": 25,
             "save_steps": 150,
-            "save_total_limit": 2,
+            "save_total_limit": 5,
             "eval_strategy": "steps" if has_validation else "no", # Use old name, as per error
             "eval_steps": 150 if has_validation else None,
             "save_strategy": "steps",
