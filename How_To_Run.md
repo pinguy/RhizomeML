@@ -22,7 +22,7 @@ mkdir -p ~/tmp-podman
 podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create container with nvidia passthrough
-distrobox create --name rhizome-dev --image localhost/rhizome-img --nvidia
+distrobox create --name rhizome-dev --image rhizome-img --nvidia
 distrobox enter rhizome-dev
 ```
 
