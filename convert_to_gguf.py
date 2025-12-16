@@ -300,7 +300,7 @@ def build_llama_cpp(llama_cpp_dir: Path) -> bool:
         configure_cmd = [
             "cmake",
             "-B", str(build_dir),
-            "-DGGML_CUDA=ON",
+            #"-DGGML_CUDA=ON",
             "-DLLAMA_CURL=OFF",  # Don't require libcurl
         ]
         
@@ -546,7 +546,7 @@ SERVER="{server_bin}"
 if [ ! -f "$SERVER" ]; then
     echo "Error: llama-server not found at $SERVER"
     echo "Please build llama.cpp first:"
-    echo "  cd {llama_cpp_dir} && cmake -B build -DGGML_CUDA=ON -DLLAMA_CURL=OFF && cmake --build build --config Release -j$(nproc)"
+    echo "  cd {llama_cpp_dir} && cmake -B build -DLLAMA_CURL=OFF && cmake --build build --config Release -j$(nproc)"
     exit 1
 fi
 
