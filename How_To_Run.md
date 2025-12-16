@@ -1,5 +1,18 @@
 # **RhizomeML – Setup & Workflow - Ubuntu 22.04**
 
+### Nvida Driver Setup
+```bash
+# Update to latest driver
+sudo apt update
+sudo ubuntu-drivers autoinstall
+# OR specifically:
+sudo apt install nvidia-driver-550
+
+# Reboot required
+sudo reboot
+```
+### **Clone the Repo**
+
 ```bash
 git clone https://github.com/pinguy/RhizomeML.git
 cd RhizomeML
