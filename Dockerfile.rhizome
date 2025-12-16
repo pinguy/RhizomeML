@@ -27,6 +27,9 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 # Set working directory
 WORKDIR /app
 
+# Upgrade pip to avoid resolver bugs
+RUN pip3 install --upgrade pip
+
 # Install basic Python packages
 RUN pip3 install --no-cache-dir --timeout 180 \
     numpy pandas scikit-learn matplotlib rich psutil tqdm pyyaml ftfy \
