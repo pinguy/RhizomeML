@@ -30,15 +30,6 @@ WORKDIR /app
 # Upgrade pip to avoid resolver bugs
 RUN pip3 install --upgrade pip
 
-# Install basic Python packages
-RUN pip3 install --no-cache-dir --timeout 180 \
-    numpy pandas scikit-learn matplotlib rich psutil tqdm pyyaml ftfy \
-    librosa scipy soundfile kokoro flask flask_cors pdfminer.six PyMuPDF faiss-cpu wandb spacy \
-    requests
-
-# Install SentenceTransformer separately
-RUN pip3 install sentence-transformers --timeout 180 --no-cache-dir
-
 # Install CUDA 12.4 toolkit
 RUN apt-get update && \
     apt-get install --fix-missing -y wget && \
