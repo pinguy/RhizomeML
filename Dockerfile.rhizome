@@ -40,8 +40,4 @@ RUN apt-get update && \
     apt-get install --fix-missing -y cuda-toolkit-12-4 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set CUDA environment
-ENV PATH=/usr/local/cuda-12.4/bin:$PATH
-ENV LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
-
 CMD ["bash"]
