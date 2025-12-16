@@ -17,7 +17,20 @@ Note: Works with 5.11.16_lowlatency Kernel for older distros.
 ### Running on Older Distros Using Distrobox
 
 ```bash
-# First, build the image. Download the Dockerfile.rhizome file from the repo.
+# On HOST
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt update
+sudo apt install nvidia-container-toolkit
+
+# Configure for podman
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+
+# Build the image. Download the Dockerfile.rhizome file from the repo.
 mkdir -p ~/tmp-podman
 podman build -t rhizome-img -f Dockerfile.rhizome
 
