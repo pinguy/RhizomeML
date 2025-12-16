@@ -178,11 +178,15 @@ nvidia-smi       # Should show your GPU
 python3 -m venv venv_gguf
 source venv_gguf/bin/activate
 
-pip3 install --use-deprecated=legacy-resolver peft
 python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
 python3 convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
 
 deactivate
+
+# Get errors run this then try again:
+
+pip3 install --use-deprecated=legacy-resolver peft
+
 ```
 
 ### Running the Model
