@@ -6,7 +6,7 @@
 sudo apt update
 sudo ubuntu-drivers autoinstall
 # OR specifically:
-udo apt install --fix-missing nvidia-driver-580
+sudo apt install --fix-missing nvidia-driver-580.95.05
 
 # Reboot required
 sudo reboot
