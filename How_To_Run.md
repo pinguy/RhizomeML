@@ -12,18 +12,15 @@ sudo apt install --fix-missing nvidia-driver-580
 sudo reboot
 
 # Note: Works with 5.11.16_lowlatency Kernel for older distros.
+
 # To use Distobox
 
 # First, build the image. Download the Dockerfile.rhizome file first from the repo.
-docker build -t rhizome-dev -f Dockerfile.rhizome .
-
-# Or with podman
-podman build -t rhizome-dev -f Dockerfile.rhizome .
+podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create image with nvidia passthrough
-distrobox create --name rhizome-dev --image localhost/rhizome-dev --nvidia
+distrobox create --name rhizome-dev --image rhizome-img --nvidia
 distrobox enter rhizome-dev
-
 
 ```
 ### **Clone the Repo**
