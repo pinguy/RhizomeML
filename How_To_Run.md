@@ -14,7 +14,7 @@ sudo reboot
 # Note: Works with 5.11.16_lowlatency Kernel for older distros.
 # To use Distobox
 
-# First, build the image
+# First, build the image. Download the Dockerfile.rhizome file first from the repo.
 docker build -t rhizome-dev -f Dockerfile.rhizome .
 
 # Or with podman
