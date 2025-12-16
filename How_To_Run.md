@@ -18,11 +18,8 @@ Note: Works with 5.11.16_lowlatency Kernel for older distros.
 
 ```bash
 # First, build the image. Download the Dockerfile.rhizome file from the repo.
-podman build -t rhizome-img -f Dockerfile.rhizome .
-
-# Or use Docker
-
-docker build -t rhizome-img -f Dockerfile.rhizome .
+mkdir -p ~/tmp-podman
+podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create container with nvidia passthrough
 distrobox create --name rhizome-dev --image localhost/rhizome-img --nvidia
