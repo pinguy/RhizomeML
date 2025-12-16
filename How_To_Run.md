@@ -10,6 +10,8 @@ sudo apt install nvidia-driver-580
 
 # Reboot required
 sudo reboot
+
+# Note: Works with 5.11.16_lowlatency Kernel for older distros.
 ```
 ### **Clone the Repo**
 
