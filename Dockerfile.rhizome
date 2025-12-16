@@ -49,10 +49,4 @@ RUN apt-get update && \
 ENV PATH=/usr/local/cuda-12.4/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
 
-# Install PyTorch with CUDA 12.4 support
-RUN pip3 install \
-    torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu124 && \
-    pip3 install transformers datasets peft
-
 CMD ["bash"]
