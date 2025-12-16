@@ -5,8 +5,6 @@
 # Update to latest driver
 sudo apt update
 sudo ubuntu-drivers autoinstall
-# OR specifically:
-sudo apt install nvidia-driver-550
 
 # Reboot required
 sudo reboot
