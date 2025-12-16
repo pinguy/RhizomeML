@@ -102,6 +102,20 @@ unzip vosk-model-en-us-0.42-gigaspeech.zip
 
 ## **Export to GGUF (for llama.cpp)**
 
+Remove old cuda toolkit
+```bash
+sudo apt remove nvidia-cuda-toolkit
+```
+Add NVIDIA's repo for newer CUDA
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+sudo apt install cuda-toolkit-12-4
+```
+
+---
+
 ```bash
 python3 -m venv venv_gguf
 source venv_gguf/bin/activate
