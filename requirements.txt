@@ -21,6 +21,8 @@ librosa
 scipy
 soundfile
 kokoro
+flask
+flask_cors
 vosk
 nltk
 keybert
