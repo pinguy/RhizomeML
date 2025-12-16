@@ -183,8 +183,6 @@ python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
 python3 convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
 
 deactivate
-
-# Get errors run this then try again:
 ```
 
 ### Running the Model
