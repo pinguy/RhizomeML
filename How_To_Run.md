@@ -1,4 +1,4 @@
-# **RhizomeML – Setup & Workflow**
+# **RhizomeML – Setup & Workflow - Ubuntu 22.04**
 
 ```bash
 git clone https://github.com/pinguy/RhizomeML.git
@@ -113,7 +113,25 @@ sudo dpkg -i cuda-keyring_1.1-1_all.deb
 sudo apt update
 sudo apt install cuda-toolkit-12-4
 ```
+ Add the CUDA paths to your `.bashrc`:
 
+ ```bash
+sudo apt install nano
+ ```
+ ```bash
+nano ~/.bashrc
+```
+Add these lines at the end:
+ ```bash
+# CUDA 12.4
+export PATH=/usr/local/cuda-12.4/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
+```
+Save with Ctrl+O, Enter, then Ctrl+X to exit.
+Then reload:
+  ```bash
+source ~/.bashrc
+```
 ---
 
 ```bash
@@ -126,6 +144,14 @@ python3 convert_to_gguf.py --quant f16  # No quantization - But can go as small 
 
 deactivate
 ```
+### Running the model
+```bash
+# GPU (if CUDA enabled)
+./llama.cpp/build/bin/llama-server -m gguf_models/*.gguf -c 8192 -ngl 99 --port 8081
+
+# CPU only
+./llama.cpp/build/bin/llama-server -m gguf_models/*.gguf -c 8192 --threads 14 --port 8081
+```
 
 ---
 
@@ -136,7 +162,8 @@ Edit these values in `train_script.py`:
 ```python
 default_batch_size = 2   # Higher value = faster training, but higher activation memory. Use 1 for the lowest memory footprint.
 default_grad_accum = 8   # Effective batch = batch_size × grad_accum.
-                         # Affects speed (higher slower), not memory. Target effective batch: 16 (e.g., 4×4, 2×8, 1×16).
+                         # Higher values = slower training but no extra memory.
+                         # Target effective batch: 16 (e.g., 4×4, 2×8, 1×16).
 ```
 
 ---
