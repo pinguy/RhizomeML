@@ -40,6 +40,7 @@ import multiprocessing
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Any, Generator
 from contextlib import contextmanager
+import argparse
 import psutil
 from pathlib import Path
 
@@ -136,8 +137,14 @@ class Config:
     # Regex pattern: map layers matching regex to device (cuda or cpu)
     # Default: Attention on GPU (fast compute), MLP/FFN on CPU (save VRAM)
     offload_pattern: str = ".*attn.*=cuda,.*mlp.*=cpu,.*feed_forward.*=cpu,.*experts.*=cpu"
+    
+    # TTS device selection: 'auto', 'cpu', 'cuda', 'mps'
+    tts_device: str = "auto"
 
 config = Config()
+
+# Global to store parsed TTS device from command line
+_TTS_DEVICE_OVERRIDE: Optional[str] = None
 
 # [Previous helper classes remain the same: PerformanceMonitor, EnhancedCache, etc.]
 class PerformanceMonitor:
@@ -1312,12 +1319,22 @@ class UCSEnhancedChatBot:
             if KOKORO_AVAILABLE:
                 logger.info("📄 Loading Kokoro TTS...")
                 try:
-                    # Force CPU for Kokoro to avoid CUDA issues
-                    tts_device = 'cpu'
-                    logger.info(f"Loading TTS on {tts_device} (CPU is most reliable)")
+                    # Determine TTS device
+                    tts_device = _TTS_DEVICE_OVERRIDE or config.tts_device
+                    
+                    if tts_device == 'auto':
+                        # Auto-detect: prefer GPU if available
+                        if torch.cuda.is_available():
+                            tts_device = 'cuda'
+                        elif torch.backends.mps.is_available():
+                            tts_device = 'mps'
+                        else:
+                            tts_device = 'cpu'
+                    
+                    logger.info(f"Loading TTS on {tts_device}")
                     tts_pipeline = KPipeline(lang_code='a', device=tts_device)
                     self.tts_processor = AsyncTTSProcessor(tts_pipeline)
-                    logger.info("✅ TTS loaded on CPU")
+                    logger.info(f"✅ TTS loaded on {tts_device}")
                 except Exception as e:
                     logger.warning(f"TTS failed: {e}")
                     self.tts_processor = None
@@ -2491,6 +2508,50 @@ def open_browser():
 
 def main():
     """Main function"""
+    global _TTS_DEVICE_OVERRIDE
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Rhizome Chat with UCS Integration')
+    
+    # TTS device selection (mutually exclusive)
+    tts_group = parser.add_mutually_exclusive_group()
+    tts_group.add_argument('--tts-cpu', action='store_true', 
+                           help='Force TTS to run on CPU')
+    tts_group.add_argument('--tts-gpu', '--tts-cuda', action='store_true',
+                           help='Force TTS to run on GPU (CUDA)')
+    tts_group.add_argument('--tts-mps', action='store_true',
+                           help='Force TTS to run on MPS (Apple Silicon)')
+    tts_group.add_argument('--tts-auto', action='store_true',
+                           help='Auto-detect best TTS device (default)')
+    
+    # Other useful args
+    parser.add_argument('--port', type=int, default=config.server_port,
+                        help=f'Server port (default: {config.server_port})')
+    parser.add_argument('--no-browser', action='store_true',
+                        help='Do not auto-open browser')
+    
+    args = parser.parse_args()
+    
+    # Apply TTS device setting
+    if args.tts_cpu:
+        _TTS_DEVICE_OVERRIDE = 'cpu'
+        logger.info("🔊 TTS device forced to: CPU")
+    elif args.tts_gpu:
+        _TTS_DEVICE_OVERRIDE = 'cuda'
+        logger.info("🔊 TTS device forced to: CUDA (GPU)")
+    elif args.tts_mps:
+        _TTS_DEVICE_OVERRIDE = 'mps'
+        logger.info("🔊 TTS device forced to: MPS (Apple Silicon)")
+    elif args.tts_auto:
+        _TTS_DEVICE_OVERRIDE = 'auto'
+        logger.info("🔊 TTS device: auto-detect")
+    # else: use config default
+    
+    # Apply other args
+    config.server_port = args.port
+    if args.no_browser:
+        config.auto_open_browser = False
+    
     logger.info("🚀 Starting Model-Agnostic UCS-Enhanced Rhizome Chat Interface...")
     
     # Auto-detect GPU availability logic similar to previous files
