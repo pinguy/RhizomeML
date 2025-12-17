@@ -8,6 +8,16 @@ making it compatible with any instruction-tuned model (Gemma, Llama, Mistral, Qw
 
 Includes "Hybrid Offloading" (Llama 4 prefill style) to split Attention/FFN between GPU/CPU.
 
+STREAMING TTS: This version includes streaming TTS output using Kokoro's native generator
+interface. Audio chunks are generated progressively as text is processed, providing faster
+perceived response times.
+
+Command line options for TTS streaming:
+  --no-tts-stream           Disable TTS streaming (use legacy batch mode)
+  --tts-chunk-size N        Characters per TTS chunk for streaming (default: 300)
+  --tts-chunk-mode line     Stream by line breaks (default: punctuation)
+  --tts-line-buffer 5       How many lines it buffers before TTS starts playing (default: 3)
+
 Replace:
 
 checkpoint_path = self._find_latest_checkpoint(config.base_dir)
@@ -25,6 +35,7 @@ import gradio as gr
 import numpy as np
 import tempfile
 import soundfile as sf
+import io
 import wave
 import json
 import subprocess
@@ -43,6 +54,7 @@ from contextlib import contextmanager
 import argparse
 import psutil
 from pathlib import Path
+import queue
 
 # Import UCS
 # Note: Ensure UCS_v3_4_1.py is in the same directory
@@ -140,6 +152,12 @@ class Config:
     
     # TTS device selection: 'auto', 'cpu', 'cuda', 'mps'
     tts_device: str = "auto"
+    
+    # TTS Streaming options
+    tts_streaming: bool = True  # Enable streaming TTS by default
+    tts_chunk_size: int = 300   # Characters per TTS chunk for streaming
+    tts_chunk_mode: str = "sentence"  # "sentence" (punctuation) or "line" (newlines)
+    tts_line_buffer: int = 3    # Number of lines to buffer before TTS in line mode
 
 config = Config()
 
@@ -448,6 +466,143 @@ class AsyncTTSProcessor:
     
     def shutdown(self):
         self.executor.shutdown(wait=True)
+
+
+class StreamingTTSProcessor:
+    """
+    Streaming TTS processor that yields audio chunks as they're generated.
+    Uses Kokoro's native generator interface for true streaming.
+    """
+    
+    def __init__(self, tts_pipeline):
+        self.tts_pipeline = tts_pipeline
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.sample_rate = 24000
+        
+    def _clean_text(self, text: str) -> str:
+        """Clean and prepare text for TTS"""
+        if not text:
+            return ""
+        
+        # Clean text
+        clean_text = re.sub(r'[^\w\s.,!?;:\'-]', '', text).strip()
+        if not clean_text:
+            return ""
+        
+        # Replace line breaks with periods to prevent stopping
+        clean_text = re.sub(r'\n+', '. ', clean_text)
+        # Remove multiple spaces
+        clean_text = re.sub(r'\s+', ' ', clean_text)
+        # Ensure proper sentence endings
+        clean_text = re.sub(r'([.!?])\s*([A-Z])', r'\1 \2', clean_text)
+        
+        return clean_text
+    
+    def generate_streaming(self, text: str, voice: str = 'af_heart', speed: float = 1.0) -> Generator[Tuple[int, np.ndarray], None, None]:
+        """
+        Generate TTS audio in streaming fashion.
+        Yields (sample_rate, audio_chunk) tuples as they're generated.
+        
+        This uses Kokoro's native generator which yields audio for each sentence/phrase.
+        """
+        if not self.tts_pipeline:
+            return
+        
+        # Truncate if too long
+        if len(text) > config.tts_max_length:
+            text = text[:config.tts_max_length]
+            # Try to end at a sentence boundary
+            last_period = text.rfind('.')
+            last_question = text.rfind('?')
+            last_exclaim = text.rfind('!')
+            last_sentence = max(last_period, last_question, last_exclaim)
+            if last_sentence > config.tts_max_length // 2:
+                text = text[:last_sentence + 1]
+        
+        clean_text = self._clean_text(text)
+        if not clean_text:
+            return
+        
+        try:
+            # Use Kokoro's native generator - it yields (graphemes, phonemes, audio) tuples
+            # for each sentence/phrase in the text
+            audio_gen = self.tts_pipeline(clean_text, voice=voice, speed=speed)
+            
+            for gs, ps, audio_chunk in audio_gen:
+                # Move to CPU if needed
+                if hasattr(audio_chunk, 'device') and audio_chunk.device.type != 'cpu':
+                    audio_chunk = audio_chunk.cpu()
+                
+                # Convert to numpy if needed
+                if hasattr(audio_chunk, 'numpy'):
+                    audio_chunk = audio_chunk.numpy()
+                
+                # Yield as (sample_rate, audio_array) tuple for Gradio
+                yield (self.sample_rate, audio_chunk)
+                
+        except Exception as e:
+            logger.warning(f"Streaming TTS Error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def generate_full(self, text: str, voice: str = 'af_heart', speed: float = 1.0) -> Optional[str]:
+        """
+        Generate complete TTS audio and save to file.
+        Returns filepath to the generated audio.
+        """
+        if not self.tts_pipeline:
+            return None
+        
+        # Truncate if too long
+        if len(text) > config.tts_max_length:
+            text = text[:config.tts_max_length]
+            last_period = text.rfind('.')
+            last_question = text.rfind('?')
+            last_exclaim = text.rfind('!')
+            last_sentence = max(last_period, last_question, last_exclaim)
+            if last_sentence > config.tts_max_length // 2:
+                text = text[:last_sentence + 1]
+        
+        clean_text = self._clean_text(text)
+        if not clean_text:
+            return None
+        
+        try:
+            # Collect all audio chunks
+            audio_segments = []
+            audio_gen = self.tts_pipeline(clean_text, voice=voice, speed=speed)
+            
+            for gs, ps, audio_chunk in audio_gen:
+                if hasattr(audio_chunk, 'device') and audio_chunk.device.type != 'cpu':
+                    audio_chunk = audio_chunk.cpu()
+                if hasattr(audio_chunk, 'numpy'):
+                    audio_chunk = audio_chunk.numpy()
+                audio_segments.append(audio_chunk)
+            
+            if not audio_segments:
+                return None
+            
+            # Concatenate all segments
+            full_audio = np.concatenate(audio_segments)
+            
+            # Save to file
+            filename = f"/tmp/tts_{uuid.uuid4().hex[:8]}.wav"
+            sf.write(filename, full_audio, self.sample_rate)
+            return filename
+            
+        except Exception as e:
+            logger.warning(f"Full TTS Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def generate_async(self, text: str, voice: str = 'af_heart', speed: float = 1.0) -> concurrent.futures.Future:
+        """Generate TTS asynchronously (non-streaming)"""
+        return self.executor.submit(self.generate_full, text, voice, speed)
+    
+    def shutdown(self):
+        self.executor.shutdown(wait=True)
+
 
 class EnhancedVoiceTranscriber:
     """Voice transcription with Vosk"""
@@ -1013,6 +1168,7 @@ class UCSEnhancedChatBot:
         self.model = None
         self.chat_handler = None  # NEW: Model-agnostic chat handler
         self.tts_processor = None
+        self.streaming_tts_processor = None  # NEW: Streaming TTS
         self.voice_transcriber = None
         self.response_cache = EnhancedCache(config.max_cache_size)
         self.performance_monitor = PerformanceMonitor()
@@ -1333,8 +1489,12 @@ class UCSEnhancedChatBot:
                     
                     logger.info(f"Loading TTS on {tts_device}")
                     tts_pipeline = KPipeline(lang_code='a', device=tts_device)
-                    self.tts_processor = AsyncTTSProcessor(tts_pipeline)
-                    logger.info(f"✅ TTS loaded on {tts_device}")
+                    
+                    # Initialize BOTH processors - streaming and legacy
+                    self.streaming_tts_processor = StreamingTTSProcessor(tts_pipeline)
+                    self.tts_processor = self.streaming_tts_processor  # Use streaming as default
+                    
+                    logger.info(f"✅ TTS loaded on {tts_device} (streaming enabled)")
                 except Exception as e:
                     logger.warning(f"TTS failed: {e}")
                     self.tts_processor = None
@@ -1890,8 +2050,16 @@ class UCSEnhancedChatBot:
                                 voice: str, speed: float, show_reasoning: bool = False,
                                 use_ucs: bool = True, temperature: float = None,
                                 top_p: float = None, top_k: int = None,
-                                max_tokens: int = None, system_prompt: str = None):
-        """Streaming chat response - yields (history, input_text, audio) tuples"""
+                                max_tokens: int = None, system_prompt: str = None,
+                                stream_tts: bool = True, tts_chunk_mode: str = "sentence"):
+        """
+        Streaming chat response - yields (history, input_text, audio) tuples.
+        
+        If stream_tts is True and TTS is enabled, audio will be streamed progressively
+        as each sentence completes during text generation.
+        
+        tts_chunk_mode: "sentence" (chunk on .!?) or "line" (chunk on newlines, buffered)
+        """
         if not user_input.strip():
             yield history, "", None
             return
@@ -1899,31 +2067,137 @@ class UCSEnhancedChatBot:
         # Add user message to history immediately
         history = history + [[user_input, ""]]
         
-        # Stream the response
+        # For true streaming TTS, we need to:
+        # 1. Track completed chunks as text streams in
+        # 2. Generate TTS for each completed chunk
+        # 3. Yield audio chunks as they're ready
+        
         final_response = ""
+        last_tts_end = 0  # Track where we've already sent to TTS
+        
+        # For line mode, we buffer multiple lines before triggering TTS
+        # This prevents the start-stop stuttering
+        line_buffer_count = 0
+        
         for partial_response in self.generate_response_streaming(
             user_input, show_reasoning, use_ucs,
             temperature, top_p, top_k, max_tokens, system_prompt
         ):
             final_response = partial_response
-            # Update the last message in history with partial response
             history[-1][1] = partial_response
-            yield history, "", None
+            
+            audio_chunk = None
+            
+            # Check if we should stream TTS
+            if enable_tts and self.streaming_tts_processor and stream_tts and config.tts_streaming:
+                # Look for new complete chunks since last TTS
+                new_text = partial_response[last_tts_end:]
+                
+                if tts_chunk_mode == "line":
+                    # Line mode: buffer multiple lines before triggering TTS
+                    # Count newlines in new text
+                    newline_matches = list(re.finditer(r'\n+', new_text))
+                    
+                    if newline_matches:
+                        current_line_count = len(newline_matches)
+                        
+                        # Only trigger TTS if we have enough buffered lines
+                        if current_line_count >= config.tts_line_buffer:
+                            # Find position after the Nth newline (buffer threshold)
+                            target_match = newline_matches[config.tts_line_buffer - 1]
+                            chunk_end_pos = target_match.end()
+                            complete_text = new_text[:chunk_end_pos].strip()
+                            
+                            if complete_text and len(complete_text) > 10:
+                                try:
+                                    audio_chunks = []
+                                    for sr, chunk in self.streaming_tts_processor.generate_streaming(
+                                        complete_text, voice, speed
+                                    ):
+                                        audio_chunks.append(chunk)
+                                    
+                                    if audio_chunks:
+                                        full_chunk = np.concatenate(audio_chunks)
+                                        wav_buffer = io.BytesIO()
+                                        sf.write(wav_buffer, full_chunk, 24000, format='WAV')
+                                        wav_buffer.seek(0)
+                                        audio_chunk = wav_buffer.read()
+                                        logger.debug(f"🔊 Streaming TTS (line, {config.tts_line_buffer} lines): {len(complete_text)} chars")
+                                except Exception as e:
+                                    logger.warning(f"Streaming TTS chunk error: {e}")
+                                
+                                last_tts_end += chunk_end_pos
+                else:
+                    # Sentence mode: trigger on punctuation as before
+                    sentence_pattern = re.compile(r'[.!?]+(?:\s|$)')
+                    matches = list(sentence_pattern.finditer(new_text))
+                    
+                    if matches:
+                        last_match = matches[-1]
+                        chunk_end_pos = last_match.end()
+                        complete_text = new_text[:chunk_end_pos].strip()
+                        
+                        if complete_text and len(complete_text) > 10:
+                            try:
+                                audio_chunks = []
+                                for sr, chunk in self.streaming_tts_processor.generate_streaming(
+                                    complete_text, voice, speed
+                                ):
+                                    audio_chunks.append(chunk)
+                                
+                                if audio_chunks:
+                                    full_chunk = np.concatenate(audio_chunks)
+                                    wav_buffer = io.BytesIO()
+                                    sf.write(wav_buffer, full_chunk, 24000, format='WAV')
+                                    wav_buffer.seek(0)
+                                    audio_chunk = wav_buffer.read()
+                                    logger.debug(f"🔊 Streaming TTS (sentence): {len(complete_text)} chars")
+                            except Exception as e:
+                                logger.warning(f"Streaming TTS chunk error: {e}")
+                            
+                            last_tts_end += chunk_end_pos
+            
+            # Yield with audio chunk if we have one
+            yield history, "", audio_chunk
         
-        # Generate TTS for the final response (after streaming completes)
-        audio_file = None
-        if enable_tts and self.tts_processor and final_response:
+        # After text generation completes, generate TTS for any remaining text
+        if enable_tts and self.streaming_tts_processor and stream_tts and config.tts_streaming:
+            remaining_text = final_response[last_tts_end:].strip()
+            if remaining_text and len(remaining_text) > 5:
+                try:
+                    audio_chunks = []
+                    for sr, chunk in self.streaming_tts_processor.generate_streaming(
+                        remaining_text, voice, speed
+                    ):
+                        audio_chunks.append(chunk)
+                    
+                    if audio_chunks:
+                        full_chunk = np.concatenate(audio_chunks)
+                        wav_buffer = io.BytesIO()
+                        sf.write(wav_buffer, full_chunk, 24000, format='WAV')
+                        wav_buffer.seek(0)
+                        audio_chunk = wav_buffer.read()
+                        yield history, "", audio_chunk
+                except Exception as e:
+                    logger.warning(f"Final TTS chunk error: {e}")
+        
+        # Non-streaming TTS fallback (if streaming disabled)
+        elif enable_tts and self.streaming_tts_processor and not stream_tts:
             try:
                 tts_text = re.sub(r'💭.*?\*\*Answer:\*\*\n', '', final_response, flags=re.DOTALL)
                 tts_text = tts_text[:config.tts_max_length]
                 if tts_text:
-                    tts_future = self.tts_processor.generate_async(tts_text, voice, speed)
+                    tts_future = self.streaming_tts_processor.generate_async(tts_text, voice, speed)
                     audio_file = tts_future.result(timeout=120.0)
+                    if audio_file:
+                        # Read file and yield as bytes for streaming component
+                        with open(audio_file, 'rb') as f:
+                            yield history, "", f.read()
             except Exception as tts_error:
                 logger.warning(f"TTS error: {tts_error}")
         
-        # Final yield with audio
-        yield history, "", audio_file
+        # Final yield (no audio)
+        yield history, "", None
     
     async def chat_response_parallel(self, user_input: str, history: List, enable_tts: bool, 
                              voice: str, speed: float, show_reasoning: bool = False,
@@ -2026,13 +2300,20 @@ class UCSEnhancedChatBot:
         if config.use_hybrid_offload:
              offload_info = f"\n- Hybrid Offload: Enabled\n- Pattern: {config.offload_pattern}"
 
+        # TTS streaming info
+        tts_info = "No"
+        if self.streaming_tts_processor:
+            tts_info = "Yes (Streaming)"
+        elif self.tts_processor:
+            tts_info = "Yes"
+
         stats_report = f"""
 📊 **Session Stats:**
 - Total: {self.stats['total_responses']}
 - Avg time: {avg_time:.2f}s
 - Errors: {self.stats['error_count']}
 - Device: {DEVICE_INFO}{model_info}{offload_info}
-- TTS: {'Yes' if self.tts_processor else 'No'}
+- TTS: {tts_info}
 - STT: {'Yes' if self.voice_transcriber else 'No'}
 
 💾 **Cache:**
@@ -2157,7 +2438,8 @@ def record_and_transcribe(audio_file_path: str) -> str:
 def process_voice_to_chat_streaming(audio_file_path: str, history: List, enable_tts: bool, 
                                     voice: str, speed: float, show_reasoning: bool,
                                     use_ucs: bool, system_prompt: str,
-                                    temperature: float, top_p: float, top_k: int, max_tokens: int):
+                                    temperature: float, top_p: float, top_k: int, max_tokens: int,
+                                    stream_tts: bool = True, tts_chunk_mode: str = "sentence"):
     """Process voice input and generate streaming response"""
     transcribed_text = chatbot.transcribe_voice_input(audio_file_path)
     
@@ -2168,7 +2450,8 @@ def process_voice_to_chat_streaming(audio_file_path: str, history: List, enable_
     
     for update in chatbot.chat_response_streaming(
         transcribed_text, history, enable_tts, voice, speed,
-        show_reasoning, use_ucs, temperature, top_p, int(top_k), int(max_tokens), system_prompt
+        show_reasoning, use_ucs, temperature, top_p, int(top_k), int(max_tokens), system_prompt,
+        stream_tts, tts_chunk_mode
     ):
         yield update
 
@@ -2205,6 +2488,8 @@ def create_gradio_interface():
         **Now works with ANY instruction-tuned model!** (Gemma, Llama, Mistral, Qwen, Phi, etc.)
         
         Memory-augmented conversations with cognitive architecture integration.
+        
+        **🔊 NEW: Streaming TTS** - Audio is generated progressively for faster response!
         """)
         
         with gr.Row():
@@ -2232,7 +2517,7 @@ def create_gradio_interface():
                     transcribe_btn = gr.Button("📝 Transcribe")
                     voice_to_chat_btn = gr.Button("🎤 Voice → Chat")
                 
-                audio_output = gr.Audio(label="Response Audio", autoplay=True)
+                audio_output = gr.Audio(label="Response Audio", autoplay=True, streaming=True)
             
             with gr.Column(scale=1):
                 with gr.Accordion("⚙️ Generation Settings", open=False):
@@ -2272,6 +2557,22 @@ def create_gradio_interface():
                 
                 with gr.Accordion("🔊 Voice Settings", open=False):
                     enable_tts = gr.Checkbox(label="Enable TTS", value=KOKORO_AVAILABLE)
+                    stream_tts_checkbox = gr.Checkbox(
+                        label="Stream TTS (faster)", 
+                        value=config.tts_streaming,
+                        info="Generate audio progressively as text is generated"
+                    )
+                    tts_chunk_mode_dropdown = gr.Dropdown(
+                        choices=["sentence", "line"],
+                        value=config.tts_chunk_mode,
+                        label="TTS Chunk Mode",
+                        info="sentence = chunk on .!? | line = chunk on newlines"
+                    )
+                    tts_line_buffer_slider = gr.Slider(
+                        minimum=1, maximum=10, value=config.tts_line_buffer, step=1,
+                        label="Line Buffer (line mode only)",
+                        info="Number of lines to buffer before TTS starts (prevents stuttering)"
+                    )
                     voice_selection = gr.Dropdown(
                         choices=['af_heart', 'af_bella', 'af_nicole', 'af_sarah', 'af_sky',
                                 'am_adam', 'am_michael', 'bf_emma', 'bf_isabella', 'bm_george', 'bm_lewis'],
@@ -2329,14 +2630,15 @@ def create_gradio_interface():
         def handle_chat_streaming(user_input_text, history, enable_tts_val, voice_val, 
                                   speed_val, show_reasoning_val, use_ucs_val,
                                   system_prompt_val, temp_val, top_p_val, top_k_val, max_tokens_val,
-                                  enable_streaming_val):
+                                  enable_streaming_val, stream_tts_val, tts_chunk_mode_val):
             """Chat handler - uses streaming or non-streaming based on toggle"""
             if enable_streaming_val:
                 # Streaming mode - yield updates as tokens are generated
                 for update in chatbot.chat_response_streaming(
                     user_input_text, history, enable_tts_val, voice_val, 
                     speed_val, show_reasoning_val, use_ucs_val,
-                    temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val
+                    temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val,
+                    stream_tts_val, tts_chunk_mode_val
                 ):
                     yield update
             else:
@@ -2416,7 +2718,7 @@ def create_gradio_interface():
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
-                   enable_streaming_checkbox],
+                   enable_streaming_checkbox, stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
         )
 
@@ -2425,7 +2727,7 @@ def create_gradio_interface():
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
-                   enable_streaming_checkbox],
+                   enable_streaming_checkbox, stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
         )
         
@@ -2433,6 +2735,17 @@ def create_gradio_interface():
             fn=apply_preset,
             inputs=[preset_buttons],
             outputs=[temperature_slider, top_p_slider, top_k_slider, max_tokens_slider]
+        )
+        
+        # Update config when line buffer changes
+        def update_line_buffer(value):
+            config.tts_line_buffer = int(value)
+            return value
+        
+        tts_line_buffer_slider.change(
+            fn=update_line_buffer,
+            inputs=[tts_line_buffer_slider],
+            outputs=[tts_line_buffer_slider]
         )
         
         reset_params_btn.click(
@@ -2478,7 +2791,8 @@ def create_gradio_interface():
             fn=process_voice_to_chat_streaming,
             inputs=[audio_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
-                   system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider],
+                   system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
+                   stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
         )
         
@@ -2524,6 +2838,16 @@ def main():
     tts_group.add_argument('--tts-auto', action='store_true',
                            help='Auto-detect best TTS device (default)')
     
+    # TTS streaming options
+    parser.add_argument('--no-tts-stream', action='store_true',
+                        help='Disable TTS streaming (use legacy batch mode)')
+    parser.add_argument('--tts-chunk-size', type=int, default=300,
+                        help='Characters per TTS chunk for streaming (default: 300)')
+    parser.add_argument('--tts-chunk-mode', choices=['sentence', 'line'], default='sentence',
+                        help='TTS chunking mode: "sentence" (on .!?) or "line" (on newlines)')
+    parser.add_argument('--tts-line-buffer', type=int, default=3,
+                        help='Number of lines to buffer before TTS in line mode (default: 3)')
+    
     # Other useful args
     parser.add_argument('--port', type=int, default=config.server_port,
                         help=f'Server port (default: {config.server_port})')
@@ -2547,12 +2871,21 @@ def main():
         logger.info("🔊 TTS device: auto-detect")
     # else: use config default
     
+    # Apply TTS streaming settings
+    if args.no_tts_stream:
+        config.tts_streaming = False
+        logger.info("🔊 TTS streaming disabled (using legacy batch mode)")
+    config.tts_chunk_size = args.tts_chunk_size
+    config.tts_chunk_mode = args.tts_chunk_mode
+    config.tts_line_buffer = args.tts_line_buffer
+    
     # Apply other args
     config.server_port = args.port
     if args.no_browser:
         config.auto_open_browser = False
     
     logger.info("🚀 Starting Model-Agnostic UCS-Enhanced Rhizome Chat Interface...")
+    logger.info("🔊 TTS Streaming: " + ("Enabled" if config.tts_streaming else "Disabled"))
     
     # Auto-detect GPU availability logic similar to previous files
     gpu_available = torch.cuda.is_available()
@@ -2588,7 +2921,10 @@ def main():
         logger.info("⚠️ UCS disabled (requires NumPy + sentence-transformers)")
 
     if KOKORO_AVAILABLE:
-        logger.info("🔊 Kokoro TTS enabled")
+        if chatbot.streaming_tts_processor:
+            logger.info("🔊 Kokoro TTS enabled (STREAMING)")
+        else:
+            logger.info("🔊 Kokoro TTS enabled")
     
     if VOSK_AVAILABLE:
         logger.info("🎤 Vosk STT enabled")
