@@ -47,7 +47,7 @@ podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create container with nvidia passthrough
 distrobox create --name rhizome-dev --image rhizome-img --nvidia
-distrobox enter rhizome-dev #May hang or fail a few time. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go though then be fine.
+distrobox enter rhizome-dev # May hang or fail a few time. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go though then be fine.
 ```
 
 ---
