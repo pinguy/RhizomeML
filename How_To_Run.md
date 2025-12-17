@@ -50,8 +50,8 @@ cd RhizomeML
 pip3 install -r requirements.txt --upgrade
 ```
 
-### **Install DeepSpeed (ZeRO-Offload)**
-
+### DeepSpeed (ZeRO-Offload) - Optional, Not Recommended
+DeepSpeed provides minimal benefit for single-GPU training and frequently causes version conflicts with PyTorch and Transformers. Skip unless you specifically need ZeRO-Offload for CPU memory offloading.
 ```bash
 DS_SKIP_CUDA_CHECK=1 DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip3 install deepspeed
 
