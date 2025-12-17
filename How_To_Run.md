@@ -17,7 +17,18 @@ Note: Works with 5.11.16_lowlatency Kernel for older distros.
 ### Running on Older Distros Using Distrobox
 
 ```bash
-# On HOST
+# Clone Distrobox
+git clone https://github.com/89luca89/distrobox.git
+cd distrobox
+
+# Install
+sudo ./install --prefix /usr/local
+distrobox version
+
+# Install Podman
+sudo apt install podman
+
+# On HOST set-up nvidia-containe
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
