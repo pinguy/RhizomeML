@@ -38,6 +38,12 @@ RUN apt-get update && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
     apt-get update && \
     apt-get install --fix-missing -y cuda-toolkit-12-4 && \
+    apt install --fix-missing -y nvidia-utils-580 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Optional: Add user (if you want to avoid running as root)
+# RUN useradd -ms /bin/bash rhizome && echo "rhizome ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# USER rhizome
+# WORKDIR /home/rhizome
 
 CMD ["bash"]
