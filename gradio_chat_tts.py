@@ -18,13 +18,17 @@ Command line options for TTS streaming:
   --tts-chunk-mode line     Stream by line breaks (default: punctuation)
   --tts-line-buffer 5       How many lines it buffers before TTS starts playing (default: 3)
 
-Replace:
+To load a Hugging Face Model
 
-checkpoint_path = self._find_latest_checkpoint(config.base_dir)
+  --model EleutherAI/gpt-neo-125m
 
-With something like this to run the model directly from HF instead of the FT version.
+Set device
 
-checkpoint_path = "google/gemma-3-4b-it-qat-int4-unquantized"
+  --tts-cpu    # Force CPU
+  --tts-gpu    # Force CUDA 
+  --tts-auto   # Auto-detect best device
+  --tts-mps    # Apple Silicon
+
 """
 
 import torch
@@ -45,7 +49,7 @@ import webbrowser
 import uuid
 import gc
 import concurrent.futures
-from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer, AutoConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer, AutoConfig, StoppingCriteria, StoppingCriteriaList
 import logging
 import multiprocessing
 from dataclasses import dataclass
@@ -1156,6 +1160,18 @@ class ChatTemplateHandler:
         return response.strip()
 
 
+class StopGenCriteria(StoppingCriteria):
+    """
+    Custom stopping criteria to allow hard stopping via UI.
+    Checks the chatbot's stop_generation flag during token generation.
+    """
+    def __init__(self, chatbot):
+        self.chatbot = chatbot
+    
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        # Check if user requested stop
+        return getattr(self.chatbot, 'stop_generation', False)
+
 class UCSEnhancedChatBot:
     """
     Rhizome ChatBot enhanced with UCS v3.4.1 - MODEL AGNOSTIC VERSION
@@ -1170,6 +1186,7 @@ class UCSEnhancedChatBot:
         self.tts_processor = None
         self.streaming_tts_processor = None  # NEW: Streaming TTS
         self.voice_transcriber = None
+        self.stop_generation = False  # Flag to stop generation mid-stream
         self.response_cache = EnhancedCache(config.max_cache_size)
         self.performance_monitor = PerformanceMonitor()
         self.conversation_history = []
@@ -1534,8 +1551,14 @@ class UCSEnhancedChatBot:
         )
     
     def _find_latest_checkpoint(self, base_dir: str) -> Optional[str]:
-        """Find latest checkpoint or use base dir if it's a valid model directory"""
+        """Find latest checkpoint, use base dir if valid, or return HuggingFace model ID"""
         base_path = Path(base_dir)
+        
+        # Check if it looks like a HuggingFace model ID (contains / but isn't a local path)
+        if '/' in base_dir and not base_path.exists():
+            # Likely a HuggingFace model ID like "mistralai/Ministral-3B-Instruct"
+            logger.info(f"🤗 Detected HuggingFace model ID: {base_dir}")
+            return base_dir
         
         if not base_path.exists() or not base_path.is_dir():
             logger.error(f"Directory not found or is not a directory: {base_dir}")
@@ -1834,6 +1857,7 @@ class UCSEnhancedChatBot:
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=stop_token_ids,
                     use_cache=True,
+                    stopping_criteria=StoppingCriteriaList([StopGenCriteria(self)]),
                 )
             
             # Decode only generated tokens
@@ -1992,6 +2016,7 @@ class UCSEnhancedChatBot:
                 'eos_token_id': stop_token_ids,
                 'use_cache': True,
                 'streamer': streamer,
+                'stopping_criteria': StoppingCriteriaList([StopGenCriteria(self)]), # ADDED HARD STOP
             }
             
             # Start generation in a separate thread
@@ -2001,9 +2026,17 @@ class UCSEnhancedChatBot:
             )
             generation_thread.start()
             
+            # Reset stop flag
+            self.stop_generation = False
+            
             # Stream the output
             generated_text = ""
             for new_text in streamer:
+                # Check if user requested stop
+                if self.stop_generation:
+                    logger.info("🛑 Generation stopped by user")
+                    break
+                
                 generated_text += new_text
                 
                 # Check for stop strings and truncate if found
@@ -2449,8 +2482,8 @@ def process_voice_to_chat_streaming(audio_file_path: str, history: List, enable_
         return
     
     for update in chatbot.chat_response_streaming(
-        transcribed_text, history, enable_tts, voice, speed,
-        show_reasoning, use_ucs, temperature, top_p, int(top_k), int(max_tokens), system_prompt,
+        transcribed_text, history, enable_tts, voice_val, 
+        speed, show_reasoning, use_ucs, temperature, top_p, int(top_k), int(max_tokens), system_prompt,
         stream_tts, tts_chunk_mode
     ):
         yield update
@@ -2507,6 +2540,7 @@ def create_gradio_interface():
                         scale=4
                     )
                     send_btn = gr.Button("Send", variant="primary", scale=1)
+                    stop_btn = gr.Button("⏹ Stop", variant="stop", scale=1)
                 
                 with gr.Row():
                     audio_input = gr.Audio(
@@ -2682,6 +2716,12 @@ def create_gradio_interface():
         def handle_clear():
             return chatbot.clear_chat(), chatbot.get_comprehensive_stats()
 
+        def handle_stop():
+            """Stop ongoing generation"""
+            chatbot.stop_generation = True
+            logger.info("🛑 Stop requested by user")
+            return "Generation stopped"
+
         def handle_stats_refresh():
             return chatbot.get_comprehensive_stats()
 
@@ -2713,7 +2753,9 @@ def create_gradio_interface():
             return status
 
         # Wire up events - using streaming for real-time text output
-        send_btn.click(
+        
+        # Capture the event objects to support cancellation
+        send_btn_click = send_btn.click(
             fn=handle_chat_streaming,
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
@@ -2722,13 +2764,20 @@ def create_gradio_interface():
             outputs=[chatbot_interface, user_input, audio_output]
         )
 
-        user_input.submit(
+        user_input_submit = user_input.submit(
             fn=handle_chat_streaming,
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
                    enable_streaming_checkbox, stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
+        )
+        
+        # Wire the STOP button to cancel both events
+        stop_btn.click(
+            fn=handle_stop,
+            outputs=[],
+            cancels=[send_btn_click, user_input_submit]
         )
         
         preset_buttons.change(
@@ -2786,14 +2835,22 @@ def create_gradio_interface():
             inputs=[audio_input],
             outputs=[user_input]
         )
-
-        voice_to_chat_btn.click(
+        
+        # Also need to capture this if we want to cancel voice-to-chat
+        voice_chat_click = voice_to_chat_btn.click(
             fn=process_voice_to_chat_streaming,
             inputs=[audio_input, chatbot_interface, enable_tts, voice_selection, 
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
                    stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
+        )
+        
+        # Add voice chat to stop button cancels
+        stop_btn.click(
+            fn=handle_stop,
+            outputs=[],
+            cancels=[send_btn_click, user_input_submit, voice_chat_click]
         )
         
         save_memory_btn.click(
@@ -2827,6 +2884,9 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Rhizome Chat with UCS Integration')
     
+    parser.add_argument('--model', type=str, default=None,
+                        help='HuggingFace model ID or local path (e.g., mistralai/Ministral-3B-Instruct-2512)')
+    
     # TTS device selection (mutually exclusive)
     tts_group = parser.add_mutually_exclusive_group()
     tts_group.add_argument('--tts-cpu', action='store_true', 
@@ -2855,6 +2915,11 @@ def main():
                         help='Do not auto-open browser')
     
     args = parser.parse_args()
+    
+    # Apply model path/ID
+    if args.model:
+        config.base_dir = args.model
+        logger.info(f"📦 Model: {args.model}")
     
     # Apply TTS device setting
     if args.tts_cpu:
@@ -2894,12 +2959,16 @@ def main():
     else:
         logger.info("⚠️ No compatible GPU detected. Falling back to CPU (Using all available cores).")
 
-    # Check if necessary directories exist
-    os.makedirs(config.base_dir, exist_ok=True)
+    # Only create directory if it's a local path (not a HuggingFace ID)
+    if '/' not in config.base_dir or Path(config.base_dir).exists():
+        os.makedirs(config.base_dir, exist_ok=True)
     
     if not chatbot.load_models():
         logger.error("❌ Failed to initialize. Check your model path.")
-        logger.error(f"   Make sure '{config.base_dir}' contains your model files or checkpoint folders.")
+        logger.error(f"   Provided: '{config.base_dir}'")
+        logger.error("   Use --model with a HuggingFace model ID or local path:")
+        logger.error("   Example: --model mistralai/Ministral-3B-Instruct-2512")
+        logger.error("   Example: --model ./my-local-model/")
         return
 
     demo = create_gradio_interface()
