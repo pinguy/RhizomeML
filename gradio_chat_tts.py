@@ -157,7 +157,7 @@ class Config:
     # TTS Streaming options
     tts_streaming: bool = True  # Enable streaming TTS by default
     tts_chunk_size: int = 300   # Characters per TTS chunk for streaming
-    tts_chunk_mode: str = "line"  # "sentence" (punctuation) or "line" (newlines)
+    tts_chunk_mode: str = "sentence"  # "sentence" (punctuation) or "line" (newlines)
     tts_line_buffer: int = 3    # Number of lines to buffer before TTS in line mode
 
 config = Config()
