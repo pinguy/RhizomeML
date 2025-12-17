@@ -17,17 +17,14 @@ Command line options for TTS streaming:
   --tts-chunk-size N        Characters per TTS chunk for streaming (default: 300)
   --tts-chunk-mode line     Stream by line breaks (default: punctuation)
   --tts-line-buffer 5       How many lines it buffers before TTS starts playing (default: 3)
+  --tts-cpu                 Force CPU
+  --tts-gpu                 Force CUDA 
+  --tts-auto                Auto-detect best device
+  --tts-mps                 Apple Silicon
 
-To load a Hugging Face Model
+To load a Hugging Face Model:
 
   --model EleutherAI/gpt-neo-125m
-
-Set device
-
-  --tts-cpu    # Force CPU
-  --tts-gpu    # Force CUDA 
-  --tts-auto   # Auto-detect best device
-  --tts-mps    # Apple Silicon
 
 """
 
