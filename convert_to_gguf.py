@@ -21,6 +21,17 @@ Requirements:
 """
 
 import os
+
+try:
+    config
+except NameError:
+    # Replace 'YOUR_HF_TOKEN_HERE' with your actual token. https://huggingface.co/settings/tokens
+    config = {
+        "HF_TOKEN": "YOUR_HF_TOKEN_HERE",
+    }
+
+os.environ["HF_TOKEN"] = config["HF_TOKEN"]
+
 import sys
 # Disable torch compile/dynamo which pulls in triton
 os.environ["TORCH_COMPILE_DISABLE"] = "1"
