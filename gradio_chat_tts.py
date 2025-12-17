@@ -157,7 +157,7 @@ class Config:
     # TTS Streaming options
     tts_streaming: bool = True  # Enable streaming TTS by default
     tts_chunk_size: int = 300   # Characters per TTS chunk for streaming
-    tts_chunk_mode: str = "sentence"  # "sentence" (punctuation) or "line" (newlines)
+    tts_chunk_mode: str = "line"  # "sentence" (punctuation) or "line" (newlines)
     tts_line_buffer: int = 3    # Number of lines to buffer before TTS in line mode
 
 config = Config()
@@ -2099,15 +2099,56 @@ class UCSEnhancedChatBot:
         
         # For true streaming TTS, we need to:
         # 1. Track completed chunks as text streams in
-        # 2. Generate TTS for each completed chunk
+        # 2. Generate TTS for each completed chunk in a separate thread (Non-blocking)
         # 3. Yield audio chunks as they're ready
         
         final_response = ""
         last_tts_end = 0  # Track where we've already sent to TTS
         
-        # For line mode, we buffer multiple lines before triggering TTS
-        # This prevents the start-stop stuttering
-        line_buffer_count = 0
+        # Setup TTS Queues for non-blocking execution
+        tts_queue = None
+        audio_queue = None
+        tts_thread = None
+        
+        if enable_tts and self.streaming_tts_processor and stream_tts and config.tts_streaming:
+            tts_queue = queue.Queue()
+            audio_queue = queue.Queue()
+            
+            def tts_worker():
+                """Background worker to generate TTS audio without blocking text generation"""
+                while True:
+                    task = tts_queue.get()
+                    if task is None: # Sentinel
+                        break
+                    
+                    try:
+                        text_seg, v, s = task
+                        # Generate audio using existing processor logic
+                        audio_chunks = []
+                        # Note: We use the existing generator but consume it here
+                        for sr, chunk in self.streaming_tts_processor.generate_streaming(text_seg, v, s):
+                            audio_chunks.append(chunk)
+                        
+                        if audio_chunks:
+                            full_chunk = np.concatenate(audio_chunks)
+                            wav_buffer = io.BytesIO()
+                            sf.write(wav_buffer, full_chunk, 24000, format='WAV')
+                            wav_buffer.seek(0)
+                            audio_data = wav_buffer.read()
+                            audio_queue.put(audio_data)
+                            logger.debug(f"🔊 TTS Worker finished chunk: {len(text_seg)} chars")
+                            
+                    except Exception as e:
+                        logger.error(f"TTS Worker Error: {e}")
+                    finally:
+                        tts_queue.task_done()
+
+            tts_thread = threading.Thread(target=tts_worker, daemon=True)
+            tts_thread.start()
+        
+        # For line mode, we buffer multiple lines before triggering TTS initially
+        # After initial buffer is met, stream every complete line immediately
+        initial_buffer_met = False
         
         for partial_response in self.generate_response_streaming(
             user_input, show_reasoning, use_ucs,
@@ -2116,47 +2157,43 @@ class UCSEnhancedChatBot:
             final_response = partial_response
             history[-1][1] = partial_response
             
-            audio_chunk = None
-            
             # Check if we should stream TTS
-            if enable_tts and self.streaming_tts_processor and stream_tts and config.tts_streaming:
+            if tts_queue: # Only runs if enabled above
                 # Look for new complete chunks since last TTS
                 new_text = partial_response[last_tts_end:]
                 
                 if tts_chunk_mode == "line":
-                    # Line mode: buffer multiple lines before triggering TTS
-                    # Count newlines in new text
+                    # Line mode: buffer initially, then stream continuously
                     newline_matches = list(re.finditer(r'\n+', new_text))
                     
                     if newline_matches:
-                        current_line_count = len(newline_matches)
-                        
-                        # Only trigger TTS if we have enough buffered lines
-                        if current_line_count >= config.tts_line_buffer:
-                            # Find position after the Nth newline (buffer threshold)
-                            target_match = newline_matches[config.tts_line_buffer - 1]
-                            chunk_end_pos = target_match.end()
+                        if not initial_buffer_met:
+                            # Initial buffering: wait for tts_line_buffer lines
+                            current_line_count = len(newline_matches)
+                            
+                            if current_line_count >= config.tts_line_buffer:
+                                # Initial buffer met - send all buffered lines
+                                last_match = newline_matches[-1]
+                                chunk_end_pos = last_match.end()
+                                complete_text = new_text[:chunk_end_pos].strip()
+                                
+                                if complete_text and len(complete_text) > 10:
+                                    tts_queue.put((complete_text, voice, speed))
+                                    logger.debug(f"✓ Queued TTS (initial buffer, {current_line_count} lines): {len(complete_text)} chars")
+                                    
+                                last_tts_end += chunk_end_pos
+                                initial_buffer_met = True
+                        else:
+                            # After initial buffer: stream every complete line immediately
+                            last_match = newline_matches[-1]
+                            chunk_end_pos = last_match.end()
                             complete_text = new_text[:chunk_end_pos].strip()
                             
                             if complete_text and len(complete_text) > 10:
-                                try:
-                                    audio_chunks = []
-                                    for sr, chunk in self.streaming_tts_processor.generate_streaming(
-                                        complete_text, voice, speed
-                                    ):
-                                        audio_chunks.append(chunk)
-                                    
-                                    if audio_chunks:
-                                        full_chunk = np.concatenate(audio_chunks)
-                                        wav_buffer = io.BytesIO()
-                                        sf.write(wav_buffer, full_chunk, 24000, format='WAV')
-                                        wav_buffer.seek(0)
-                                        audio_chunk = wav_buffer.read()
-                                        logger.debug(f"🔊 Streaming TTS (line, {config.tts_line_buffer} lines): {len(complete_text)} chars")
-                                except Exception as e:
-                                    logger.warning(f"Streaming TTS chunk error: {e}")
+                                tts_queue.put((complete_text, voice, speed))
+                                logger.debug(f"→ Queued TTS (continuous): {len(complete_text)} chars")
                                 
-                                last_tts_end += chunk_end_pos
+                            last_tts_end += chunk_end_pos
                 else:
                     # Sentence mode: trigger on punctuation as before
                     sentence_pattern = re.compile(r'[.!?]+(?:\s|$)')
@@ -2168,48 +2205,41 @@ class UCSEnhancedChatBot:
                         complete_text = new_text[:chunk_end_pos].strip()
                         
                         if complete_text and len(complete_text) > 10:
-                            try:
-                                audio_chunks = []
-                                for sr, chunk in self.streaming_tts_processor.generate_streaming(
-                                    complete_text, voice, speed
-                                ):
-                                    audio_chunks.append(chunk)
-                                
-                                if audio_chunks:
-                                    full_chunk = np.concatenate(audio_chunks)
-                                    wav_buffer = io.BytesIO()
-                                    sf.write(wav_buffer, full_chunk, 24000, format='WAV')
-                                    wav_buffer.seek(0)
-                                    audio_chunk = wav_buffer.read()
-                                    logger.debug(f"🔊 Streaming TTS (sentence): {len(complete_text)} chars")
-                            except Exception as e:
-                                logger.warning(f"Streaming TTS chunk error: {e}")
+                            tts_queue.put((complete_text, voice, speed))
+                            logger.debug(f"w Queued TTS (sentence): {len(complete_text)} chars")
                             
                             last_tts_end += chunk_end_pos
             
-            # Yield with audio chunk if we have one
-            yield history, "", audio_chunk
+            # Yield with audio chunk if we have one available (NON-BLOCKING check)
+            next_audio = None
+            if audio_queue:
+                try:
+                    next_audio = audio_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            
+            yield history, "", next_audio
         
-        # After text generation completes, generate TTS for any remaining text
-        if enable_tts and self.streaming_tts_processor and stream_tts and config.tts_streaming:
+        # After text generation completes, queue any remaining text
+        if tts_queue:
             remaining_text = final_response[last_tts_end:].strip()
             if remaining_text and len(remaining_text) > 5:
+                tts_queue.put((remaining_text, voice, speed))
+            
+            # Signal worker to stop
+            tts_queue.put(None)
+            
+            # Wait for remaining audio to finish processing
+            # We keep yielding to keep UI alive/responsive
+            while tts_thread.is_alive() or not audio_queue.empty():
                 try:
-                    audio_chunks = []
-                    for sr, chunk in self.streaming_tts_processor.generate_streaming(
-                        remaining_text, voice, speed
-                    ):
-                        audio_chunks.append(chunk)
-                    
-                    if audio_chunks:
-                        full_chunk = np.concatenate(audio_chunks)
-                        wav_buffer = io.BytesIO()
-                        sf.write(wav_buffer, full_chunk, 24000, format='WAV')
-                        wav_buffer.seek(0)
-                        audio_chunk = wav_buffer.read()
-                        yield history, "", audio_chunk
-                except Exception as e:
-                    logger.warning(f"Final TTS chunk error: {e}")
+                    # Wait for audio chunks
+                    next_audio = audio_queue.get(timeout=0.1)
+                    yield history, "", next_audio
+                except queue.Empty:
+                    # If waiting for processing, just keep connection alive
+                    if tts_thread.is_alive():
+                        yield history, "", None
         
         # Non-streaming TTS fallback (if streaming disabled)
         elif enable_tts and self.streaming_tts_processor and not stream_tts:
