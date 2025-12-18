@@ -175,22 +175,6 @@ sudo apt update
 sudo apt install cuda-toolkit-12-4
 ```
 
-Add the CUDA paths to your `.bashrc`:
-```bash
-nano ~/.bashrc
-```
-
-Add these lines at the end:
-```bash
-# CUDA 12.4
-export PATH=/usr/local/cuda-12.4/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
-```
-
-Save with `Ctrl+O`, Enter, then `Ctrl+X` to exit. Then reload:
-```bash
-source ~/.bashrc
-```
 Symlink CUDA so it can be found:
 
 ```bash
@@ -216,6 +200,8 @@ python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
 python3 convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
 
 deactivate
+
+# Once llama.cpp is compiled don't need venv_gguf anymore.
 ```
 
 ### Running the Model
