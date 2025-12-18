@@ -221,6 +221,9 @@ deactivate
 ### Running the Model
 
 ```bash
+# GPU (if CUDA enabled)
+./llama.cpp/build/bin/llama-server -m gguf_models/*.gguf -c 8192 -ngl 99 --port 8081
+
 # CPU only
 ./llama.cpp/build/bin/llama-server -m gguf_models/*.gguf -c 8192 --threads 14 --port 8081
 ```
