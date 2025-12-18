@@ -309,7 +309,7 @@ def build_llama_cpp(llama_cpp_dir: Path) -> bool:
         configure_cmd = [
             "cmake",
             "-B", str(build_dir),
-            #"-DGGML_CUDA=ON",
+            "-DGGML_CUDA=ON",
             "-DLLAMA_CURL=OFF",  # Don't require libcurl
         ]
         
