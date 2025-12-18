@@ -28,7 +28,7 @@ distrobox version
 # Install Podman
 sudo apt install podman
 
-# On HOST set-up nvidia-containe
+# On HOST set-up nvidia-container
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
@@ -47,7 +47,7 @@ podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create container with nvidia passthrough
 distrobox create --name rhizome-dev --image rhizome-img --nvidia
-distrobox enter rhizome-dev # May hang or fail a few time. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go though then will be fine.
+distrobox enter rhizome-dev # May hang or fail a few times. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go through then will be fine.
 ```
 
 ---
@@ -160,7 +160,9 @@ unzip vosk-model-en-us-0.42-gigaspeech.zip
 
 ## **Export to GGUF (for llama.cpp)**
 
-### GPU Support (skip if CPU-only)
+### GPU Support for llama.cpp (skip if CPU-only)
+
+This section is only needed if you want to run inference with GPU acceleration via llama.cpp. Training uses PyTorch's own CUDA and doesn't require this.
 
 Remove old cuda toolkit:
 ```bash
@@ -175,7 +177,7 @@ sudo apt update
 sudo apt install cuda-toolkit-12-4
 ```
 
-Symlink CUDA so it can be found:
+Symlink CUDA so it can be found (only needed if cmake can't find libcuda during the llama.cpp build):
 
 ```bash
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so
@@ -198,12 +200,12 @@ pip3 install --use-deprecated=legacy-resolver peft
 
 python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
 python3 convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
-python convert_to_gguf.py --gpu         # Build with CUDA (default)
-python convert_to_gguf.py --cpu         # Build without CUDA (CPU-only)
+python3 convert_to_gguf.py --gpu        # Build with CUDA (default)
+python3 convert_to_gguf.py --cpu        # Build without CUDA (CPU-only)
 
 deactivate
 
-# Once llama.cpp is compiled don't need venv_gguf anymore.
+# The venv isolates llama.cpp's build dependencies from the pipeline. Once compiled, you don't need it anymore.
 ```
 
 ### Running the Model
