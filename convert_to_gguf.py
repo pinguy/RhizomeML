@@ -15,6 +15,8 @@ Usage:
     python convert_to_gguf.py --checkpoint checkpoint-2100
     python convert_to_gguf.py --quant q4_k_m           # Specify quantization
     python convert_to_gguf.py --output my_model.gguf   # Custom output name
+    python convert_to_gguf.py --gpu                    # Build with CUDA (default)
+    python convert_to_gguf.py --cpu                    # Build without CUDA (CPU-only)
 
 Requirements:
     pip install torch transformers peft accelerate sentencepiece
@@ -285,7 +287,7 @@ def check_cmake_available() -> bool:
         return False
 
 
-def build_llama_cpp(llama_cpp_dir: Path) -> bool:
+def build_llama_cpp(llama_cpp_dir: Path, cuda_enabled: bool = True) -> bool:
     """Build llama.cpp using CMake."""
     logger.info("=" * 60)
     logger.info("Building llama.cpp binaries...")
@@ -303,13 +305,17 @@ def build_llama_cpp(llama_cpp_dir: Path) -> bool:
     
     build_dir = llama_cpp_dir / "build"
     
+    # Set CUDA flag based on argument
+    cuda_flag = "ON" if cuda_enabled else "OFF"
+    logger.info(f"CUDA support: {cuda_flag}")
+    
     try:
         # Configure with CMake
         logger.info("Configuring with CMake...")
         configure_cmd = [
             "cmake",
             "-B", str(build_dir),
-            "-DGGML_CUDA=ON",
+            f"-DGGML_CUDA={cuda_flag}",
             "-DLLAMA_CURL=OFF",  # Don't require libcurl
         ]
         
@@ -407,7 +413,7 @@ def clone_llama_cpp(target_dir: Path) -> bool:
         return False
 
 
-def ensure_llama_cpp_built(llama_cpp_dir: Path) -> bool:
+def ensure_llama_cpp_built(llama_cpp_dir: Path, cuda_enabled: bool = True) -> bool:
     """Ensure llama.cpp is cloned and built, building if necessary."""
     
     # Check if already built
@@ -421,14 +427,14 @@ def ensure_llama_cpp_built(llama_cpp_dir: Path) -> bool:
     # Check if repo exists but not built
     if (llama_cpp_dir / "convert_hf_to_gguf.py").exists():
         logger.info("llama.cpp found but binaries not built, building now...")
-        return build_llama_cpp(llama_cpp_dir)
+        return build_llama_cpp(llama_cpp_dir, cuda_enabled)
     
     # Need to clone first
     if not clone_llama_cpp(llama_cpp_dir):
         return False
     
     # Then build
-    return build_llama_cpp(llama_cpp_dir)
+    return build_llama_cpp(llama_cpp_dir, cuda_enabled)
 
 
 def convert_to_gguf(
@@ -692,7 +698,24 @@ Quantization options (smallest to largest):
         help="Device for LoRA merge (default: cpu, use cuda if you have VRAM)"
     )
     
+    # CUDA build options (mutually exclusive)
+    cuda_group = parser.add_mutually_exclusive_group()
+    cuda_group.add_argument(
+        "--gpu",
+        action="store_true",
+        default=True,
+        help="Build llama.cpp with CUDA support (default)"
+    )
+    cuda_group.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Build llama.cpp without CUDA support (CPU-only)"
+    )
+    
     args = parser.parse_args()
+    
+    # Handle mutually exclusive --cpu/--gpu flags
+    cuda_enabled = not args.cpu
     
     logger.info("=" * 60)
     logger.info("RhizomeML to GGUF Converter")
@@ -743,7 +766,7 @@ Quantization options (smallest to largest):
     
     # Ensure llama.cpp is available and built
     if not args.skip_build:
-        if not ensure_llama_cpp_built(llama_cpp):
+        if not ensure_llama_cpp_built(llama_cpp, cuda_enabled):
             logger.error("Cannot proceed without llama.cpp")
             sys.exit(1)
     else:
