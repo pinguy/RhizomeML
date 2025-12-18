@@ -251,36 +251,91 @@ class Config:
 # ============================================================================
 
 def clean_text(text: str) -> str:
-    """Robust text cleaning function."""
+    """Robust text cleaning function (structure-safe)."""
+
+    # --- Encoding fixes ---
     text = ftfy.fix_encoding(text)
     text = ftfy.fix_text(text)
+
+    # --- Whitespace (space-only, not newline) ---
     text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+
+    # --- Structural recovery ---
+    text = re.sub(r'\s*---\s*', '\n\n---\n\n', text)
+
+    # Headings: require real content after hashes
+    text = re.sub(
+        r'(?<!\n)(#{1,6}\s+(?=\S))',
+        r'\n\1',
+        text
+    )
+
+    # Numbered lists: require content after number
+    text = re.sub(
+        r'(?<!\n)(\b\d{1,2}\.\s+(?=\S))',
+        r'\n\1',
+        text
+    )
+
+    # --- Remove empty / junk headings ---
+    text = re.sub(
+        r'^\s*#{1,6}\s*(?:\*+|_+)?\s*$',
+        '',
+        text,
+        flags=re.MULTILINE
+    )
+
+    # --- Emoji spam ---
     text = re.sub(r'[\U0001F300-\U0001F9FF]{3,}', '', text)
+
+    # --- Normalize excessive newlines ---
     text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # --- Zero-width chars ---
     text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
+
+    # --- Hyphen line breaks ---
     text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
-    # Removes quotes around single words: "dog" → dog.
-    #text = re.sub(r'\b"(\w+)"\b', r'\1', text)
-    # Removes quotes after punctuation: "Go home!" → Go home!.
-    #text = re.sub(r'"([^"]+[.,!?])"', r'\1', text)
-    # Removes quotes from capitalized phrases at sentence ends: "This is Serious" → This is Serious.
-    #text = re.sub(r'"([A-Z][^"]*?)"(?=\s|$)', r'\1', text)
+
+    # --- Quote cleanup ---
     text = re.sub(r'\\(["\'])', r'\1', text)
     while '\\\"' in text or "\\\'" in text:
         text = text.replace('\\\"', '"').replace("\\\'", "'")
+
     text = re.sub(r'\*+"', '"', text)
     text = re.sub(r'"\*+', '"', text)
     text = re.sub(r'\*\s*"', ' *"', text)
     text = re.sub(r'"\s*\*', '"* ', text)
-    text = re.sub(r"(?i)\b([a-z]+)9(?=(?:t|s|m|re|ve|ll|d)\b)", r"\1'", text)
-    text = re.sub(r"(?i)(?<=in)9(?=\b|[^a-z])", "g", text)
-    text = re.sub(r"(?i)\b([a-z]{2,})9(?=s\b)", r"\1'", text)
+
+    # --- OCR apostrophe fixes ---
+    text = re.sub(
+        r"(?i)\b([a-z]+)9(?=(?:t|s|m|re|ve|ll|d)\b)",
+        r"\1'",
+        text
+    )
+    text = re.sub(
+        r"(?i)(?<=in)9(?=\b|[^a-z])",
+        "g",
+        text
+    )
+    text = re.sub(
+        r"(?i)\b([a-z]{2,})9(?=s\b)",
+        r"\1'",
+        text
+    )
+
+    # --- Punctuation collapse ---
     text = re.sub(r'([!?.,]){2,}["\']', r'\1"', text)
-    text = re.sub(r' {2,}', ' ', text)
+
+    # --- Final spacing ---
+    text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'\b9em\b', 'em', text)
+
+    # --- Final OCR 9 cleanup ---
     text = re.sub(r'(?<!\d)9(?!\d)', '', text)
+
     return text.strip()
+
 
 def validate_text(text: str, cfg: Config) -> bool:
     """Robust text validation function."""
