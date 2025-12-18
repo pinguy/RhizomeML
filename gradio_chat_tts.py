@@ -139,7 +139,7 @@ class Config:
     ucs_fast_retrieval: bool = False  # False = use full cognitive loop with experts, True = fast direct retrieval
     
     # Quantization
-    use_quantization: bool = True  # Enable/disable quantization
+    use_quantization: bool = False  # Enable/disable quantization
     quantization_bits: int = 4  # 4-bit or 8-bit (4-bit recommended)
     bnb_4bit_compute_dtype: str = "float16"  # Compute dtype
     bnb_4bit_quant_type: str = "nf4"  # "nf4" or "fp4" (nf4 recommended)
