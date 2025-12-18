@@ -302,11 +302,6 @@ def clean_text(text: str) -> str:
     while '\\\"' in text or "\\\'" in text:
         text = text.replace('\\\"', '"').replace("\\\'", "'")
 
-    text = re.sub(r'\*+"', '"', text)
-    text = re.sub(r'"\*+', '"', text)
-    text = re.sub(r'\*\s*"', ' *"', text)
-    text = re.sub(r'"\s*\*', '"* ', text)
-
     # --- OCR apostrophe fixes ---
     text = re.sub(
         r"(?i)\b([a-z]+)9(?=(?:t|s|m|re|ve|ll|d)\b)",
