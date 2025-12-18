@@ -191,6 +191,11 @@ Save with `Ctrl+O`, Enter, then `Ctrl+X` to exit. Then reload:
 ```bash
 source ~/.bashrc
 ```
+Symlink CUDA so it can be found:
+
+```bash
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so
+```
 
 Verify installation:
 ```bash
