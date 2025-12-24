@@ -27,6 +27,14 @@ except NameError:
 
 os.environ["HF_TOKEN"] = config["HF_TOKEN"]
 
+# --- Hugging Face download stability (disable CAS/Xet) ---
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
+# Optional but recommended for slow/unstable links
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
+os.environ["HF_HUB_ETAG_TIMEOUT"] = "600"
+
 import torch
 import json
 import matplotlib.pyplot as plt
