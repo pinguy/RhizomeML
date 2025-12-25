@@ -148,6 +148,8 @@ python3 gradio_chat_tts.py --tts-gpu    # Force CUDA
 python3 gradio_chat_tts.py --tts-auto   # Auto-detect best device
 python3 gradio_chat_tts.py --tts-mps    # Apple Silicon
 python3 gradio_chat_tts.py  --model Qwen/Qwen3-4B-Instruct-2507    # Load and use a model from Hugging Face
+
+# RTX_gradio_chat_tts.py uses bfloat16 (bf16)
 ```
 
 ### **STT Setup (Vosk)**
