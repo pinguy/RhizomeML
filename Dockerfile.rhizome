@@ -20,6 +20,7 @@ RUN apt update && apt install --fix-missing -y \
     nano \
     nvtop \
     htop \
+    libxcb-cursor0 \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
 # Use tini as init
