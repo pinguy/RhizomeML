@@ -57,14 +57,6 @@ import psutil
 from pathlib import Path
 import queue
 
-# --- Hugging Face download stability (disable CAS/Xet) ---
-os.environ["HF_HUB_DISABLE_XET"] = "1"
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
-
-# Optional but recommended for slow/unstable links
-os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
-os.environ["HF_HUB_ETAG_TIMEOUT"] = "600"
-
 # Import UCS
 # Note: Ensure UCS_v3_4_1.py is in the same directory
 try:
