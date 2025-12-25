@@ -1634,6 +1634,10 @@ class OptimizedDataProcessor:
             'source_distribution': defaultdict(int)
         }
         
+        # Combined training file (all splits in one file)
+        combined_train_path = output_dir / f"{self.config.output_prefix}_train.jsonl"
+        combined_train_file = open(combined_train_path, "w", encoding="utf-8")
+        
         for split_name, data in splits.items():
             if not data: continue
             
@@ -1653,24 +1657,25 @@ class OptimizedDataProcessor:
                 source = pair.get('source_metadata', {}).get('source', 'unknown')
                 metadata_summary['source_distribution'][source] += 1
             
-            # PATCH: Save formatted for training with "text" AND "source_metadata"
-            path = output_dir / f"{self.config.output_prefix}_{split_name}.jsonl"
-            with open(path, "w", encoding="utf-8") as f:
-                for item in data:
-                    # Include source_metadata with normalized types for theme-weighted sampling
-                    formatted = {
-                        "text": item['text'],
-                        "source_metadata": normalize_metadata_types(item.get('source_metadata', {}))
-                    }
-                    f.write(json.dumps(formatted, ensure_ascii=False) + "\n")
+            # Write to combined training file
+            for item in data:
+                # Include source_metadata with normalized types for theme-weighted sampling
+                formatted = {
+                    "text": item['text'],
+                    "source_metadata": normalize_metadata_types(item.get('source_metadata', {}))
+                }
+                combined_train_file.write(json.dumps(formatted, ensure_ascii=False) + "\n")
             
-            # Save detailed for analysis
+            # Save detailed for analysis (separate files per split)
             det_path = output_dir / f"{self.config.output_prefix}_{split_name}_detailed.jsonl"
             with open(det_path, "w", encoding="utf-8") as f:
                 for item in data:
                     f.write(json.dumps(item, ensure_ascii=False) + "\n")
             
-            logger.info(f"Saved {len(data)} items to {path}")
+            logger.info(f"Saved {len(data)} detailed items to {det_path}")
+        
+        combined_train_file.close()
+        logger.info(f"Saved {sum(len(data) for data in splits.values())} combined items to {combined_train_path}")
         
         with open(output_dir / "dataset_metadata.json", "w", encoding="utf-8") as f:
             json.dump(metadata_summary, f, indent=2, ensure_ascii=False)
@@ -1902,7 +1907,7 @@ def main(cfg: Config):
         logger.info(f"  {source}: {count} ({percentage:.1f}%)")
     
     logger.info("\n✅ All datasets saved successfully!")
-    logger.info(f"   Training format files: {cfg.output_prefix}_{{train,validation,test}}.jsonl")
+    logger.info(f"   Training format file: {cfg.output_prefix}_train.jsonl (all splits combined)")
     logger.info(f"   Detailed files: {cfg.output_prefix}_{{train,validation,test}}_detailed.jsonl")
     logger.info(f"   Metadata: dataset_metadata.json")
     
