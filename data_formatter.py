@@ -130,6 +130,7 @@ def normalize_metadata_types(metadata: Dict) -> Dict:
     """
     Normalize metadata types to ensure schema consistency for PyArrow.
     Converts all IDs and timestamps to strings to avoid type conflicts.
+    Also filters out empty strings from semantic themes.
     """
     if not isinstance(metadata, dict):
         return metadata
@@ -141,6 +142,9 @@ def normalize_metadata_types(metadata: Dict) -> Dict:
         elif key in ['conversation_id', 'message_id', 'user_id', 'timestamp']:
             # Convert IDs and timestamps to strings for consistency
             normalized[key] = str(value)
+        elif key in ['semantic_themes', 'themes'] and isinstance(value, list):
+            # FILTER FIX: Remove empty strings from theme lists
+            normalized[key] = [str(v) for v in value if v and str(v).strip()]
         elif isinstance(value, dict):
             # Recursively normalize nested dicts
             normalized[key] = normalize_metadata_types(value)
@@ -689,8 +693,9 @@ class SemanticLabeler:
     def _label_normal(self, text: str) -> Dict:
         phrases, words = self._get_raw_candidates(text)
         
-        phrases = [self._normalize(p) for p in phrases if p and len(p) >= self.cfg.theme_normalization_min_length]
-        words = [self._normalize(w) for w in words if w and len(w) >= self.cfg.theme_normalization_min_length]
+        # FIX: Ensure _normalize return value is checked for None/Empty
+        phrases = [res for p in phrases if (res := self._normalize(p)) and len(res) >= self.cfg.theme_normalization_min_length]
+        words = [res for w in words if (res := self._normalize(w)) and len(res) >= self.cfg.theme_normalization_min_length]
         
         all_themes = list(dict.fromkeys(phrases + words))[:self.cfg.max_themes_per_chunk]
         if not all_themes:
@@ -711,8 +716,9 @@ class SemanticLabeler:
     def _label_adaptive(self, text: str) -> Dict:
         phrases, words = self._get_raw_candidates(text)
         
-        norm_phrases = {self._normalize(p) for p in phrases if p and len(p) >= self.cfg.theme_normalization_min_length}
-        norm_words = {self._normalize(w) for w in words if w and len(w) >= self.cfg.theme_normalization_min_length}
+        # FIX: Ensure _normalize return value is checked for None/Empty using set comprehension
+        norm_phrases = {res for p in phrases if (res := self._normalize(p)) and len(res) >= self.cfg.theme_normalization_min_length}
+        norm_words = {res for w in words if (res := self._normalize(w)) and len(res) >= self.cfg.theme_normalization_min_length}
         
         all_normalized = norm_phrases | norm_words
         if self.memory.generation > 0:
@@ -725,7 +731,8 @@ class SemanticLabeler:
             concept_matches = self._match_to_centroids(text)
             themes.extend(concept_matches)
         
-        themes = list(dict.fromkeys(themes))[:self.cfg.max_themes_per_chunk]
+        # Remove empty strings again just to be safe
+        themes = [t for t in list(dict.fromkeys(themes)) if t][:self.cfg.max_themes_per_chunk]
         if not themes:
             themes = [self._classify_content_type(text)]
         
@@ -799,13 +806,22 @@ class SemanticLabeler:
         if len(re.findall(r'\d+', text)) / max(len(text.split()), 1) > 0.1: return 'data_content'
         return 'general_content'
     
-    def _normalize(self, theme: str) -> str:
-        if not theme: return ''
+    def _normalize(self, theme: str) -> Optional[str]:
+        """
+        Normalize a theme string. 
+        Returns None if the string is empty or invalid to prevent 'theme leakage'.
+        """
+        if not theme: return None
         theme = theme.lower().strip()
         theme = re.sub(r'[^\w\s-]', '', theme)
         theme = re.sub(r'\s+', '_', theme)
         words = [w for w in theme.split('_') if w not in self.stopwords]
-        return '_'.join(words)
+        result = '_'.join(words)
+        
+        # Only return if meaningful content remains
+        if result and len(result) >= 1:
+            return result
+        return None
     
     def _apply_coherence_weights(self, candidates: Set[str], text: str) -> List[Tuple[str, float]]:
         scored = []
@@ -1081,10 +1097,34 @@ class QABuilder:
     def __init__(self, cfg: Config, model: SentenceTransformer):
         self.cfg = cfg
         self.model = model
+
+    def _smart_truncate(self, text: str, max_chars: int = 500) -> str:
+        """
+        Truncates text smartly to avoid cutting words in half.
+        Prioritizes ending at a sentence boundary.
+        """
+        if len(text) <= max_chars:
+            return text
+        
+        truncated = text[:max_chars]
+        # Try to cut at last sentence ending
+        last_sentence = max(truncated.rfind('. '), truncated.rfind('? '), truncated.rfind('! '))
+        if last_sentence != -1:
+            return truncated[:last_sentence + 1]
+            
+        # Fallback: cut at last space
+        last_space = truncated.rfind(' ')
+        if last_space != -1:
+            return truncated[:last_space]
+            
+        return truncated
     
     def _diverse_prompts(self, chunk_text: str, metadata: Dict) -> List[str]:
         paras = re.split(r'\n\n+', chunk_text)
-        first = (paras[0][:500] if paras else chunk_text[:500]).strip()
+        # FIX: Use smart truncate instead of hard slicing
+        base_text = paras[0] if paras else chunk_text
+        first = self._smart_truncate(base_text.strip(), 500)
+        
         key_terms = list(set(re.findall(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\b', chunk_text)))
         
         theme = metadata.get('primary_theme', 'general_topic')
@@ -1336,7 +1376,7 @@ class OptimizedDataProcessor:
     # ========================================================================
 
     def create_conversational_pairs(self, convo_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Optimized conversational pair creation"""
+        """Optimized conversational pair creation with FIXED assistant text extraction"""
         pairs = []
         conversations: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
         for entry in convo_entries:
@@ -1375,8 +1415,19 @@ class OptimizedDataProcessor:
                     else:
                         final_user_text = user_text_raw
                     
+                    # FIX: Extract ONLY the assistant response (remove any "Assistant:" prefix)
+                    assistant_text_raw = text
+                    
+                    # If there's an "Assistant:" prefix, extract just the response
+                    assistant_match = re.search(r'Assistant:\s*(.+?)(?:\s*User:|$)', assistant_text_raw, re.DOTALL)
+                    if assistant_match:
+                        final_assistant_text = assistant_match.group(1).strip()
+                    else:
+                        # No prefix found, use the full text
+                        final_assistant_text = assistant_text_raw
+                    
                     batch_user_texts.append(final_user_text)
-                    batch_assistant_texts.append(text)
+                    batch_assistant_texts.append(final_assistant_text)
                     
                     # PATCH: Normalize metadata types for schema consistency
                     batch_metadata.append({
@@ -1387,7 +1438,7 @@ class OptimizedDataProcessor:
                         'source': 'conversation'
                     })
                     
-                    conversation_context.extend([f"User: {final_user_text}", f"Assistant: {text}"])
+                    conversation_context.extend([f"User: {final_user_text}", f"Assistant: {final_assistant_text}"])
                     current_user_msg = None
                 else:
                     current_user_msg = None
@@ -1736,7 +1787,7 @@ def main(cfg: Config):
     # LOAD MEMORY DATA
     # ========================================================================
     
-    logger.info("\n🔥 LOADING MEMORY DATA...")
+    logger.info("\n📥 LOADING MEMORY DATA...")
     
     # Load memory texts and metadata
     memory_entries_raw = processor.load_memory_texts()
