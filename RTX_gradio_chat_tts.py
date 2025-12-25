@@ -60,6 +60,14 @@ import queue
 # Enable TF32 for better performance on Ampere (RTX 3060) and newer
 torch.set_float32_matmul_precision('high')
 
+# --- Hugging Face download stability (disable CAS/Xet) ---
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
+# Optional but recommended for slow/unstable links
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
+os.environ["HF_HUB_ETAG_TIMEOUT"] = "600"
+
 # Import UCS
 # Note: Ensure UCS_v3_4_1.py is in the same directory
 try:
