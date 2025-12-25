@@ -1,11 +1,12 @@
 import os
-# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
+# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Suppress DeepSpeed accelerator warning
 os.environ["DS_ACCELERATOR"] = "cuda"  # Prevents "Setting accelerator to CPU" warning
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
 
 # Suppress PyTorch cpp_extension CUDA warning when running on CPU
 import logging
@@ -512,7 +513,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "google/gemma-3-1b-it-qat-int4-unquantized")
+        model_name: The model name or path (e.g., "google/gemma-3-4b-it-qat-int4-unquantized")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -1521,7 +1522,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
+    def __init__(self, model_name="google/gemma-3-4b-it-qat-int4-unquantized"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -2150,13 +2151,13 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
+    trainer = RhizomeTrainer(model_name="google/gemma-3-4b-it-qat-int4-unquantized")
     
     try:
         # Call the main training function with desired parameters
         result = trainer.train(
             train_file="data_finetune/dataset_train.jsonl",
-            #val_file="data_finetune/dataset_validation.jsonl",  # Enable validation for theme tracking
+            #val_file="data_finetune/dataset_validation_detailed.jsonl",  # Enable validation for theme tracking
             output_dir="./RhizomeML-finetuned",
             
             # NEW: Semantic and CPU optimization features
