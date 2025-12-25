@@ -221,6 +221,14 @@ deactivate
 
 # CPU only
 ./llama.cpp/build/bin/llama-server -m gguf_models/*.gguf -c 8192 --threads 14 --port 8081
+
+# Offloding
+./llama.cpp/build/bin/llama-server \
+  -m ./gguf_models/*.gguf \
+  --n-gpu-layers 999 \
+  --ctx-size 2048 \
+  --batch-size 512 \
+  --port 8081
 ```
 
 ---
