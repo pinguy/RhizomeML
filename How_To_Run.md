@@ -226,8 +226,8 @@ deactivate
 ./llama.cpp/build/bin/llama-server \
   -m ./gguf_models/*.gguf \
   --n-gpu-layers 999 \
-  --ctx-size 2048 \
-  --batch-size 512 \
+  --ctx-size 10240 \
+  --batch-size 248 \
   --port 8081
 ```
 
