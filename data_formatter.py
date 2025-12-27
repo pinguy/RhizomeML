@@ -420,13 +420,14 @@ class IPFSemanticEnhancer:
         
         co_matrix = co_matrix + 0.1
         
+        # PATCH 6: Division by Zero Protection
         if expected_marginals:
-            row_marginals = [expected_marginals.get(t, self.memory.theme_counts[t]) 
+            row_marginals = [max(0.1, expected_marginals.get(t, self.memory.theme_counts[t])) 
                            for t in themes]
         else:
-            row_marginals = [self.memory.theme_counts[t] for t in themes]
+            row_marginals = [max(0.1, self.memory.theme_counts[t]) for t in themes]
         
-        col_marginals = row_marginals.copy()
+        col_marginals = [max(0.1, self.memory.theme_counts[t]) for t in themes]
         
         if not all(np.isfinite(row_marginals)) or not all(np.isfinite(col_marginals)):
             logger.warning("Non-finite marginals, skipping IPF calibration")
@@ -472,8 +473,9 @@ class IPFSemanticEnhancer:
                 if child in self.memory.hierarchy[parent]:
                     table[i, j] = self.memory.co_occurrence[parent].get(child, 1.0)
         
-        row_totals = [self.memory.theme_counts[p] for p in parent_themes]
-        col_totals = [self.memory.theme_counts[c] for c in children_list]
+        # PATCH 6: Division by Zero Protection
+        row_totals = [max(0.1, self.memory.theme_counts[p]) for p in parent_themes]
+        col_totals = [max(0.1, self.memory.theme_counts[c]) for c in children_list]
         
         if not all(np.isfinite(row_totals)) or not all(np.isfinite(col_totals)):
             logger.warning("Non-finite totals in hierarchy, skipping")
@@ -515,10 +517,11 @@ class IPFSemanticEnhancer:
         
         doc_theme_matrix = doc_theme_matrix + 0.1
         
+        # PATCH 6: Division by Zero Protection
         if target_distribution:
-            col_totals = [target_distribution.get(t, self.memory.theme_counts[t]) for t in themes]
+            col_totals = [max(0.1, target_distribution.get(t, self.memory.theme_counts[t])) for t in themes]
         else:
-            col_totals = [self.memory.theme_counts[t] for t in themes]
+            col_totals = [max(0.1, self.memory.theme_counts[t]) for t in themes]
         
         row_totals = doc_theme_matrix.sum(axis=1).tolist()
         
@@ -697,9 +700,15 @@ class SemanticLabeler:
         phrases = [res for p in phrases if (res := self._normalize(p)) and len(res) >= self.cfg.theme_normalization_min_length]
         words = [res for w in words if (res := self._normalize(w)) and len(res) >= self.cfg.theme_normalization_min_length]
         
+        # PATCH 3: Theme Safety
         all_themes = list(dict.fromkeys(phrases + words))[:self.cfg.max_themes_per_chunk]
+        # Remove any empty/None themes
+        all_themes = [t for t in all_themes if t and t.strip()]
         if not all_themes:
             all_themes = [self._classify_content_type(text)]
+        # Final safety check
+        if not all_themes or not all_themes[0]:
+            all_themes = ['general_content']
         
         for t in all_themes:
             self.discovered[t] += 1
@@ -731,10 +740,13 @@ class SemanticLabeler:
             concept_matches = self._match_to_centroids(text)
             themes.extend(concept_matches)
         
-        # Remove empty strings again just to be safe
+        # PATCH 3: Theme Safety
         themes = [t for t in list(dict.fromkeys(themes)) if t][:self.cfg.max_themes_per_chunk]
         if not themes:
             themes = [self._classify_content_type(text)]
+        # Final safety check
+        if not themes or not themes[0]:
+            themes = ['general_content']
         
         self._current_run_records.append({
             'text': text,
@@ -798,12 +810,39 @@ class SemanticLabeler:
         themes.update(re.findall(r'"([^"]{3,30})"', text)[:3])
         return themes
     
+    # PATCH 3: Theme Safety (Replaced method)
     def _classify_content_type(self, text: str) -> str:
+        """Always returns a valid non-empty theme"""
+        if not text or not text.strip():
+            return 'general_content'
+        
         text_lower = text.lower()
-        if any(w in text_lower for w in ['study', 'research', 'experiment']): return 'research_content'
-        if any(w in text_lower for w in ['section', 'chapter', 'introduction']): return 'structured_document'
-        if any(w in text_lower for w in ['figure', 'table', 'chart']): return 'visual_reference'
-        if len(re.findall(r'\d+', text)) / max(len(text.split()), 1) > 0.1: return 'data_content'
+        
+        # Research content
+        if any(w in text_lower for w in ['study', 'research', 'experiment', 'hypothesis', 'findings']): 
+            return 'research_content'
+        
+        # Structured document
+        if any(w in text_lower for w in ['section', 'chapter', 'introduction', 'conclusion', 'abstract']): 
+            return 'structured_document'
+        
+        # Visual reference
+        if any(w in text_lower for w in ['figure', 'table', 'chart', 'graph', 'diagram']): 
+            return 'visual_reference'
+        
+        # Data-heavy content
+        if len(re.findall(r'\d+', text)) / max(len(text.split()), 1) > 0.1: 
+            return 'data_content'
+        
+        # Code content
+        if any(w in text_lower for w in ['function', 'class', 'def ', 'import ', 'return ']): 
+            return 'code_content'
+        
+        # Question/Answer format
+        if text.strip().endswith('?') or any(w in text_lower for w in ['what', 'how', 'why', 'when', 'where']):
+            return 'question_content'
+        
+        # ALWAYS return something valid
         return 'general_content'
     
     def _normalize(self, theme: str) -> Optional[str]:
@@ -1225,8 +1264,9 @@ class OptimizedDataProcessor:
     # LOAD MEMORY TEXTS
     # ========================================================================
 
+    # PATCH 2: Add Metadata Validation
     def load_memory_texts(self) -> List[Dict]:
-        """Load memory texts and metadata"""
+        """Load memory texts and metadata with validation"""
         texts_path = Path(self.config.input_memory_texts_path)
         metadata_path = Path(self.config.input_memory_metadata_path)
         
@@ -1244,17 +1284,57 @@ class OptimizedDataProcessor:
             with open(metadata_path, 'rb') as f:
                 embedded_metadata = pickle.load(f)
             
-            logger.info(f"✓ Loaded {len(embedded_texts)} memory texts")
+            logger.info(f"✓ Loaded {len(embedded_texts)} raw memory texts")
             
-            entries = [
-                {'text': text, 'metadata': meta} 
-                for text, meta in zip(embedded_texts, embedded_metadata)
-            ]
+            # VALIDATE STRUCTURE
+            entries = []
+            skipped_invalid = 0
+            skipped_missing_fields = 0
             
+            for text, meta in zip(embedded_texts, embedded_metadata):
+                # Ensure meta is a dict
+                if not isinstance(meta, dict):
+                    skipped_invalid += 1
+                    continue
+                
+                # Ensure text is valid
+                if not text or not isinstance(text, str):
+                    skipped_invalid += 1
+                    continue
+                
+                # Ensure source field exists
+                if 'source' not in meta:
+                    meta['source'] = 'unknown'
+                
+                # For conversations, ensure critical fields exist
+                if meta.get('source') == 'conversation':
+                    if 'author' not in meta:
+                        skipped_missing_fields += 1
+                        continue
+                    if 'conversation_id' not in meta:
+                        meta['conversation_id'] = 'unknown'
+                    if 'timestamp' not in meta:
+                        meta['timestamp'] = 0
+                
+                # For PDFs, ensure filename exists
+                elif meta.get('source') == 'pdf':
+                    if 'filename' not in meta:
+                        meta['filename'] = 'unknown_pdf'
+                
+                entries.append({'text': text, 'metadata': meta})
+            
+            if skipped_invalid > 0:
+                logger.warning(f"⚠️ Skipped {skipped_invalid} entries with invalid structure")
+            if skipped_missing_fields > 0:
+                logger.warning(f"⚠️ Skipped {skipped_missing_fields} conversation entries missing required fields")
+            
+            logger.info(f"✓ Validated {len(entries)} entries")
             return entries
         
         except Exception as e:
             logger.error(f"Failed to load memory texts: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     # ========================================================================
@@ -1404,19 +1484,14 @@ class OptimizedDataProcessor:
                     context_text = " ".join(conversation_context[-self.config.context_window_size:])
                     current_user_msg['context'] = context_text
                     
+                # PATCH 1: Fix Conversational Pair Creation
                 elif author == 'assistant' and current_user_msg:
-                    # Extract ONLY the final user message (without context prefix)
-                    user_text_raw = current_user_msg['cleaned_text']
+                    # Use cleaned_text directly - it's already the user's message
+                    user_text = current_user_msg['cleaned_text'].strip()
+                    assistant_text = text.strip()
                     
-                    # If there's a "User:" prefix, extract just the final message
-                    user_match = re.search(r'User:\s*(.+?)(?:\s*Assistant:|$)', user_text_raw, re.DOTALL)
-                    if user_match:
-                        final_user_text = user_match.group(1).strip()
-                    else:
-                        final_user_text = user_text_raw
-                    
-                    batch_user_texts.append(final_user_text)
-                    batch_assistant_texts.append(text)
+                    batch_user_texts.append(user_text)
+                    batch_assistant_texts.append(assistant_text)
                     
                     # PATCH: Normalize metadata types for schema consistency
                     batch_metadata.append({
@@ -1427,7 +1502,7 @@ class OptimizedDataProcessor:
                         'source': 'conversation'
                     })
                     
-                    conversation_context.extend([f"User: {final_user_text}", f"Assistant: {text}"])
+                    conversation_context.extend([f"User: {user_text}", f"Assistant: {assistant_text}"])
                     current_user_msg = None
                 else:
                     current_user_msg = None
@@ -1536,9 +1611,28 @@ class OptimizedDataProcessor:
                 # Use QABuilder
                 questions = qa_builder._diverse_prompts(chunk_text, metadata)
                 
+                # PATCH 4: Truncate PDF Answers
                 for question in questions:
                     batch_questions.append(question)
-                    batch_answers.append(chunk_text)
+                    
+                    # Truncate answer to reasonable length (~200 words = ~300 tokens)
+                    words = chunk_text.split()
+                    if len(words) > 200:
+                        truncated_answer = ' '.join(words[:200])
+                        # Try to end at sentence boundary
+                        last_period = truncated_answer.rfind('. ')
+                        last_question = truncated_answer.rfind('? ')
+                        last_exclaim = truncated_answer.rfind('! ')
+                        last_sentence = max(last_period, last_question, last_exclaim)
+                        
+                        if last_sentence > len(truncated_answer) * 0.7:  # Don't cut too much
+                            truncated_answer = truncated_answer[:last_sentence + 1]
+                        else:
+                            truncated_answer += '...'
+                    else:
+                        truncated_answer = chunk_text
+                    
+                    batch_answers.append(truncated_answer)
                     
                     # PATCH: Normalize metadata types for schema consistency
                     normalized_meta = normalize_metadata_types(metadata)
@@ -1610,10 +1704,32 @@ class OptimizedDataProcessor:
         logger.info(f"Splits: Train={len(splits['train'])}, Validation={len(splits['validation'])}, Test={len(splits['test'])}")
         return splits
 
+    # PATCH 5: Add Text Deduplication
     def save_datasets(self, splits: Dict[str, List[Dict[str, Any]]]) -> None:
         """Saves the splits to .jsonl files."""
         output_dir = Path(self.config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # ===== ADD THIS BLOCK =====
+        # Deduplicate by text field before saving (catches any duplicates that slipped through)
+        logger.info("\n🔍 Checking for duplicate training examples...")
+        for split_name in splits:
+            text_seen = set()
+            deduped = []
+            for item in splits[split_name]:
+                text_hash = hashlib.md5(item['text'].encode('utf-8')).hexdigest()
+                if text_hash not in text_seen:
+                    text_seen.add(text_hash)
+                    deduped.append(item)
+            
+            duplicates_removed = len(splits[split_name]) - len(deduped)
+            if duplicates_removed > 0:
+                logger.warning(f"  ⚠️ {split_name}: Removed {duplicates_removed} duplicate texts")
+            else:
+                logger.info(f"  ✓ {split_name}: No duplicates found")
+            
+            splits[split_name] = deduped
+        # ===== END NEW BLOCK =====
         
         metadata_summary = {
             'total_pairs': sum(len(data) for data in splits.values()),
