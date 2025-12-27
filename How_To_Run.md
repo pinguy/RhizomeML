@@ -134,7 +134,7 @@ Note:
 ## **Gradio Chat + TTS (RAM Heavy)**
 
 ```bash
-python3 gradio_chat_tts.py --tts-cpu    # Force CPU
+python3 gradio_chat_tts.py --tts-cpu    # Force CPU - Recommended
 python3 gradio_chat_tts.py --tts-gpu    # Force CUDA 
 python3 gradio_chat_tts.py --tts-auto   # Auto-detect best device
 python3 gradio_chat_tts.py --tts-mps    # Apple Silicon
