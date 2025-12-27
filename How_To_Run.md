@@ -12,7 +12,7 @@ sudo apt install --fix-missing nvidia-driver-580
 sudo reboot
 ```
 
-Note: Works with 5.11.16_lowlatency Kernel for older distros.
+**Note:** Tested and known to work on the `5.11.16_lowlatency` kernel for older distributions. Newer kernels are recommended where available.
 
 ### Running on Older Distros Using Distrobox
 
@@ -243,12 +243,6 @@ On GTX-class or older GPUs, disabling some features can slightly reduce memory u
 # GPU defaults
 default_batch_size = 2
 default_grad_accum = 8
-default_fp16 = False                  # Uses less memory, but slower.
-default_gradient_checkpointing = False # Uses less memory, but slower.
+default_fp16 = False                  
+default_gradient_checkpointing = False
 ```
-
-### Notes:
-
-* **FP16**: If supported, enabling FP16 usually **roughly doubles training speed**.
-* **Gradient checkpointing**: Reduces memory at the cost of extra compute.
-* For most modern GPUs, enabling both FP16 and gradient checkpointing gives the best balance of speed and stability.
