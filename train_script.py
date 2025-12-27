@@ -2157,7 +2157,7 @@ def main():
         # Call the main training function with desired parameters
         result = trainer.train(
             train_file="data_finetune/dataset_train.jsonl",
-            #val_file="data_finetune/dataset_validation_detailed.jsonl",  # Enable validation for theme tracking
+            #val_file="data_finetune/dataset_validation.jsonl",  # Enable validation for theme tracking
             output_dir="./RhizomeML-finetuned",
             
             # NEW: Semantic and CPU optimization features
