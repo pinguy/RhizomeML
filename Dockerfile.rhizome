@@ -20,6 +20,8 @@ RUN apt update && apt install --fix-missing -y \
     nano \
     nvtop \
     htop \
+    libcanberra-gtk-module \
+    libcanberra-gtk3-module \
     libxcb-cursor0 \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
