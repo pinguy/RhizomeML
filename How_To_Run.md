@@ -234,3 +234,21 @@ default_grad_accum = 8   # Effective batch = batch_size × grad_accum.
                          # Higher = slower training, no extra memory.
                          # Target effective batch: 16 (e.g., 4×4, 2×8, 1×16).
 ```
+
+## **GPU Memory vs Speed Trade-offs (GTX / Older GPUs)**
+
+On GTX-class or older GPUs, disabling some features can slightly reduce memory usage. However, if your GPU supports FP16, **leave it enabled**—it typically provides a significant speedup.
+
+```python
+# GPU defaults
+default_batch_size = 2
+default_grad_accum = 8
+default_fp16 = False                  # Uses less memory, but slower.
+default_gradient_checkpointing = False # Uses less memory, but slower.
+```
+
+### Notes:
+
+* **FP16**: If supported, enabling FP16 usually **roughly doubles training speed**.
+* **Gradient checkpointing**: Reduces memory at the cost of extra compute.
+* For most modern GPUs, enabling both FP16 and gradient checkpointing gives the best balance of speed and stability.
