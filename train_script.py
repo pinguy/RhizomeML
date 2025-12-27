@@ -1831,8 +1831,8 @@ class RhizomeTrainer:
             # GPU defaults
             default_batch_size = 2
             default_grad_accum = 8
-            default_fp16 = False
-            default_gradient_checkpointing = False
+            default_fp16 = True
+            default_gradient_checkpointing = True
             #deepspeed_config = "deepspeed_config.json"
         
         default_args = {
