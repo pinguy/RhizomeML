@@ -1,5 +1,5 @@
 import os
-# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune most models 3b and under.
+# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finetune most models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -2022,19 +2022,11 @@ class RhizomeTrainer:
             if last_checkpoint_path:
                 training_logger.set_checkpoint_info(last_checkpoint_path)
             
-            # WARNING: If resuming with different quantization settings, clear checkpoints
-            if last_checkpoint_path and USE_QLORA:
-                logger.warning("⚠️ Found existing checkpoint, but QLoRA is enabled.")
-                logger.warning("⚠️ If the checkpoint was trained without QLoRA, this may cause issues.")
-                logger.warning("⚠️ If training hangs or errors occur, delete the checkpoint folder and restart.")
-            
             # Step 8: Start training
             self.print_section("Training Progress", "🚀")
             
             if last_checkpoint_path:
                 logger.info(f"🔄 Resuming training from checkpoint: {last_checkpoint_path}")
-                logger.info("⏳ First step with QLoRA may take 5-10 minutes to initialize...")
-                logger.info("💡 You should see activity in htop or nvtop - if not, something is wrong")
                 
                 # Restore theme tracker state if available
                 theme_state_path = Path(last_checkpoint_path) / 'theme_tracker_state.json'
@@ -2065,7 +2057,6 @@ class RhizomeTrainer:
 
             else:
                 logger.info("🎯 Starting fresh training run...")
-                logger.info("⏳ First step with QLoRA may take 5-10 minutes to initialize...")
                 logger.info("💡 You should see activity in htop or nvtop - if not, something is wrong")
                 logger.info("🚀 Starting training loop (patience, initialization can be slow)...")
                 trainer.train()
