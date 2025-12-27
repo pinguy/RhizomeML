@@ -1854,7 +1854,7 @@ class RhizomeTrainer:
             "metric_for_best_model": "eval_loss" if has_validation else None,
             "greater_is_better": False,
             "save_safetensors": True,
-            "dataloader_num_workers": 0,
+            "dataloader_num_workers": 4,
             "dataloader_pin_memory": True if not USE_CPU_ONLY else False,  # CPU optimization
             "remove_unused_columns": True,
             "seed": 42,
@@ -2177,7 +2177,7 @@ def main():
             warmup_steps=100,
             logging_steps=25,
             save_steps=150,
-            dataloader_num_workers=0,
+            dataloader_num_workers=4,
         )
         
         if result:
