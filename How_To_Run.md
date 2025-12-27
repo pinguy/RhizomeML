@@ -64,15 +64,6 @@ cd RhizomeML
 pip3 install -r requirements.txt --upgrade
 ```
 
-### DeepSpeed (ZeRO-Offload) - Optional, Not Recommended
-DeepSpeed provides minimal benefit for single-GPU training and frequently causes version conflicts with PyTorch and Transformers. Skip unless you specifically need ZeRO-Offload for CPU memory offloading.
-```bash
-DS_SKIP_CUDA_CHECK=1 DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip3 install deepspeed
-
-python3 -m deepspeed.env_report
-# Adam should be enabled. ZeRO-Offload is mostly configured but disabled by default.
-```
-
 ---
 
 ## **Data Preparation**
@@ -242,19 +233,4 @@ default_batch_size = 2   # Higher = faster training, but more memory. Use 1 for 
 default_grad_accum = 8   # Effective batch = batch_size × grad_accum.
                          # Higher = slower training, no extra memory.
                          # Target effective batch: 16 (e.g., 4×4, 2×8, 1×16).
-```
-
----
-
-# **Theme-Based Early Stopping**
-
-Training stops when:
-
-* The epoch limit is reached (default: 3), **or**
-* All semantic themes have been observed.
-
-To change this behavior, modify:
-
-```python
-metrics['coverage'] >= 1.0
 ```
