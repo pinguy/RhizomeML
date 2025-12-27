@@ -57,13 +57,8 @@ import psutil
 from pathlib import Path
 import queue
 
-# --- Hugging Face download stability (disable CAS/Xet) ---
-os.environ["HF_HUB_DISABLE_XET"] = "1"
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
-
-# Optional but recommended for slow/unstable links
-os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
-os.environ["HF_HUB_ETAG_TIMEOUT"] = "600"
+# Enable TF32 for better performance on Ampere (RTX 3060) and newer
+torch.set_float32_matmul_precision('high')
 
 # Import UCS
 # Note: Ensure UCS_v3_4_1.py is in the same directory
@@ -149,7 +144,7 @@ class Config:
     # Quantization
     use_quantization: bool = False  # Enable/disable quantization
     quantization_bits: int = 4  # 4-bit or 8-bit (4-bit recommended)
-    bnb_4bit_compute_dtype: str = "float16"  # Compute dtype
+    bnb_4bit_compute_dtype: str = "bfloat16"  # Changed from "float16"
     bnb_4bit_quant_type: str = "nf4"  # "nf4" or "fp4" (nf4 recommended)
     bnb_4bit_use_double_quant: bool = True  # Nested quantization for extra savings
 
@@ -263,7 +258,9 @@ def torch_inference_mode():
     """Context manager for optimized PyTorch inference"""
     with torch.inference_mode():
         if DEVICE.type == 'cuda':
-            with torch.cuda.amp.autocast():
+            # FIX: Explicitly pass the dtype to autocast
+            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            with torch.cuda.amp.autocast(dtype=dtype):
                 yield
         else:
             yield
@@ -1416,8 +1413,15 @@ class UCSEnhancedChatBot:
                         logger.info("📦 Loading quantized model (this may take a moment)...")
                     else:
                         # Standard loading
-                        model_kwargs['dtype'] = torch.float16 if DEVICE.type in ['cuda', 'mps'] else torch.float32
-                        logger.info("📦 Loading model without quantization...")
+                        # FIX: Prioritize bfloat16 for stability on Ampere+ GPUs (RTX 30xx/40xx)
+                        # This prevents "probability tensor contains either inf, nan" errors common with Gemma/Llama
+                        if DEVICE.type == 'cuda' and torch.cuda.is_bf16_supported():
+                            model_kwargs['dtype'] = torch.bfloat16
+                            logger.info("⚙️ Using bfloat16 precision for stability (Recommended for Gemma/Llama)")
+                        else:
+                            model_kwargs['dtype'] = torch.float16 if DEVICE.type in ['cuda', 'mps'] else torch.float32
+                            
+                        logger.info(f"📦 Loading model with {model_kwargs['dtype']}...")
                     
                     self.model = AutoModelForCausalLM.from_pretrained(
                         checkpoint_path,
@@ -1621,7 +1625,7 @@ class UCSEnhancedChatBot:
             _ = self.model.generate(
                 **inputs,
                 max_new_tokens=10,
-                do_sample=True,
+                do_sample=False,
                 pad_token_id=self.tokenizer.pad_token_id
             )
         
@@ -1863,6 +1867,7 @@ class UCSEnhancedChatBot:
                     eos_token_id=stop_token_ids,
                     use_cache=True,
                     stopping_criteria=StoppingCriteriaList([StopGenCriteria(self)]),
+                    renormalize_logits=True,  # ADD THIS - prevents probability explosions
                 )
             
             # Decode only generated tokens
@@ -2016,12 +2021,20 @@ class UCSEnhancedChatBot:
             # Generation kwargs
             generation_kwargs = {
                 **inputs,
-                **{k: v for k, v in gen_config.items() if k != 'name'},
+                'max_new_tokens': gen_config.get('max_new_tokens', 512),
+                'do_sample': gen_config.get('do_sample', True),
+                'temperature': gen_config.get('temperature', 0.8),
+                'top_p': gen_config.get('top_p', 0.95),
+                'top_k': gen_config.get('top_k', 50),
+                'repetition_penalty': gen_config.get('repetition_penalty', 1.1),
                 'pad_token_id': self.tokenizer.pad_token_id,
                 'eos_token_id': stop_token_ids,
                 'use_cache': True,
                 'streamer': streamer,
-                'stopping_criteria': StoppingCriteriaList([StopGenCriteria(self)]), # ADDED HARD STOP
+                'stopping_criteria': StoppingCriteriaList([StopGenCriteria(self)]),
+                # CRITICAL: Add these for stability with Gemma
+                'renormalize_logits': True,  # Prevents NaN/Inf in probabilities
+                'output_scores': False,  # Reduces memory usage
             }
             
             # Start generation in a separate thread
