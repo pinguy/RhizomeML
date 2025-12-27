@@ -1636,12 +1636,12 @@ class RhizomeTrainer:
 
             # Configure LoRA adapters
             lora_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                qalora_group_size=32,
+                r=8,
+                lora_alpha=16,
+                qalora_group_size=16,
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
-                bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
+                bias="none", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
                 task_type=TaskType.CAUSAL_LM,
                 fan_in_fan_out=fan_in_fan_out
             )
