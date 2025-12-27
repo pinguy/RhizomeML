@@ -1,5 +1,5 @@
 import os
-# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
+# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune most models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -1854,7 +1854,6 @@ class RhizomeTrainer:
             "metric_for_best_model": "eval_loss" if has_validation else None,
             "greater_is_better": False,
             "save_safetensors": True,
-            "dataloader_num_workers": 4,
             "dataloader_pin_memory": True if not USE_CPU_ONLY else False,  # CPU optimization
             "remove_unused_columns": True,
             "seed": 42,
@@ -1923,13 +1922,6 @@ class RhizomeTrainer:
             # Step 3: Configure training arguments
             self.print_section("Training Configuration", "⚙️")
             has_validation = "validation" in tokenized_dataset
-            
-            # DataLoader worker seeding setup
-            if training_kwargs.get("dataloader_num_workers", 0) > 0:
-                logger.info(f"Configuring DataLoader with worker_init_fn for {training_kwargs.get('dataloader_num_workers')} workers.")
-                training_kwargs['dataloader_worker_init_fn'] = seed_worker
-            else:
-                logger.info("DataLoader num_workers is 0, worker_init_fn not applied.")
 
             training_args = self.create_training_args(
                 output_dir=output_dir,
@@ -2177,7 +2169,6 @@ def main():
             warmup_steps=100,
             logging_steps=25,
             save_steps=150,
-            dataloader_num_workers=4,
         )
         
         if result:
