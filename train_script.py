@@ -1854,7 +1854,6 @@ class RhizomeTrainer:
             "metric_for_best_model": "eval_loss" if has_validation else None,
             "greater_is_better": False,
             "save_safetensors": True,
-            "dataloader_num_workers": 0,
             "dataloader_pin_memory": True if not USE_CPU_ONLY else False,  # CPU optimization
             "remove_unused_columns": True,
             "seed": 42,
@@ -1923,13 +1922,6 @@ class RhizomeTrainer:
             # Step 3: Configure training arguments
             self.print_section("Training Configuration", "⚙️")
             has_validation = "validation" in tokenized_dataset
-            
-            # DataLoader worker seeding setup
-            if training_kwargs.get("dataloader_num_workers", 0) > 0:
-                logger.info(f"Configuring DataLoader with worker_init_fn for {training_kwargs.get('dataloader_num_workers')} workers.")
-                training_kwargs['dataloader_worker_init_fn'] = seed_worker
-            else:
-                logger.info("DataLoader num_workers is 0, worker_init_fn not applied.")
 
             training_args = self.create_training_args(
                 output_dir=output_dir,
@@ -2175,7 +2167,6 @@ def main():
             warmup_steps=100,
             logging_steps=25,
             save_steps=150,
-            dataloader_num_workers=0,
         )
         
         if result:
