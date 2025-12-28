@@ -1638,7 +1638,7 @@ class RhizomeTrainer:
             lora_config = LoraConfig(
                 r=16,
                 lora_alpha=32,
-                qalora_group_size = 24 # Any higher and it starts chatting with itself like “<|user|>Hello<|assistant|>Hi<|endoftext|>WAIT THERE’S MORE DATA HERE!”
+                qalora_group_size = 18 # Any higher and it starts chatting with itself like “<|user|>Hello<|assistant|>Hi<|endoftext|>WAIT THERE’S MORE DATA HERE!”
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
                 bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
