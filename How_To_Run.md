@@ -244,3 +244,17 @@ default_grad_accum = 8
 default_fp16 = False                  
 default_gradient_checkpointing = False
 ```
+---
+
+# **Theme-Based Early Stopping**
+
+Training stops when:
+
+* The epoch limit is reached (default: 3), **or**
+* All semantic themes have been observed.
+
+To change this behavior, modify:
+
+```python
+metrics['coverage'] >= 1.0
+```
