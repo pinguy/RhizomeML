@@ -1,13 +1,11 @@
 import os
-
-# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finetune most models 3b and under.
+# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Suppress DeepSpeed accelerator warning
 os.environ["DS_ACCELERATOR"] = "cuda"  # Prevents "Setting accelerator to CPU" warning
-os.environ["TORCH_COMPILE_DISABLE"] = "1"
 
 # Suppress PyTorch cpp_extension CUDA warning when running on CPU
 import logging
@@ -125,6 +123,8 @@ def setup_logging():
     logging.getLogger("transformers.trainer").setLevel(logging.ERROR)
     logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
     logging.getLogger("peft").setLevel(logging.ERROR)
+    logging.getLogger("deepspeed").setLevel(logging.ERROR)
+    logging.getLogger("real_accelerator").setLevel(logging.ERROR)
     
     return logging.getLogger(__name__)
 
@@ -512,7 +512,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "google/gemma-3-4b-it-qat-int4-unquantized")
+        model_name: The model name or path (e.g., "google/gemma-3-1b-it-qat-int4-unquantized")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -614,51 +614,61 @@ class ThemeTracker:
 def create_theme_weighted_sampler(dataset, theme_tracker: ThemeTracker) -> Optional[WeightedRandomSampler]:
     """
     Create a weighted sampler that oversamples underrepresented themes.
-    
-    Args:
-        dataset: HuggingFace dataset with 'source_metadata' containing themes
-        theme_tracker: ThemeTracker instance with theme weights
-    
-    Returns:
-        WeightedRandomSampler or None if theme data not available
     """
     try:
         weights = []
         missing_metadata = 0
-        
+
         for example in dataset:
-            # Try to extract themes from various possible locations
             themes = None
-            
-            if 'source_metadata' in example and example['source_metadata']:
-                metadata = example['source_metadata']
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except:
-                        pass
-                
-                if isinstance(metadata, dict):
-                    themes = metadata.get('themes', metadata.get('phrase_themes', []))
-            
+
+            metadata = example.get("source_metadata")
+
+            # Parse metadata if needed
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = None
+
+            if isinstance(metadata, dict):
+                # Priority order (most specific → most general_content)
+                themes = (
+                    metadata.get("themes")
+                    or metadata.get("semantic_themes")
+                    or metadata.get("primary_theme")
+                )
+
+                # Fallback: extract from nested convo metadata
+                if not themes:
+                    user_msg = metadata.get("user_msg", {})
+                    assistant_msg = metadata.get("assistant_msg", {})
+
+                    themes = (
+                        user_msg.get("semantic_themes")
+                        or assistant_msg.get("semantic_themes")
+                    )
+
+            # Final fallback
             if not themes:
-                themes = ['general']
+                themes = ["general_content"]
                 missing_metadata += 1
-            
+
             weight = theme_tracker.get_sample_weight(themes)
             weights.append(weight)
-        
+
         if missing_metadata > 0:
-            logger.warning(f"⚠️ {missing_metadata}/{len(dataset)} examples missing theme metadata")
-        
-        if not weights:
-             logger.warning("⚠️ No weights generated for sampler.")
-             return None
-             
-        logger.info(f"📊 Sample weights - min: {min(weights):.3f}, max: {max(weights):.3f}, mean: {np.mean(weights):.3f}")
-        
+            logger.warning(
+                f"⚠️ {missing_metadata}/{len(dataset)} examples missing theme metadata"
+            )
+
+        logger.info(
+            f"📊 Sample weights - min: {min(weights):.3f}, "
+            f"max: {max(weights):.3f}, mean: {np.mean(weights):.3f}"
+        )
+
         return WeightedRandomSampler(weights, len(weights), replacement=True)
-    
+
     except Exception as e:
         logger.warning(f"⚠️ Could not create weighted sampler: {e}")
         return None
@@ -680,6 +690,7 @@ class ThemeAwareTrainer(Trainer):
         self.theme_tracker = theme_tracker
         self.original_dataset = original_dataset
         self.original_dataset_size = len(original_dataset) if original_dataset else 0
+        self._last_logged_step = -1  # Track last logged step to avoid duplicates during gradient accumulation
         if not theme_tracker:
             logger.warning("ThemeAwareTrainer initialized without a ThemeTracker!")
         if not original_dataset:
@@ -705,7 +716,7 @@ class ThemeAwareTrainer(Trainer):
                 
                 batch_themes = []
                 for example in sampled_examples:
-                    themes = ['general'] # Default
+                    themes = ['general_content'] # Default
                     if 'source_metadata' in example and example['source_metadata']:
                         metadata = example['source_metadata']
                         if isinstance(metadata, str):
@@ -715,23 +726,64 @@ class ThemeAwareTrainer(Trainer):
                                 metadata = {}
                         
                         if isinstance(metadata, dict):
-                            themes = metadata.get('themes', metadata.get('phrase_themes', ['general']))
+                            themes = metadata.get('themes', metadata.get('primary_theme', ['general_content']))
                             if not themes:
-                                themes = ['general']
+                                themes = ['general_content']
                     
                     batch_themes.append(themes)
                 
                 # Record the themes
                 self.theme_tracker.record_batch_themes(batch_themes, is_training=True)
 
-                # Log diversity metrics every 100 steps (as per user's prompt)
-                if self.state.global_step > 0 and self.state.global_step % 100 == 0:
-                    metrics = self.theme_tracker.get_diversity_metrics(is_training=True)
+                # Get current metrics
+                metrics = self.theme_tracker.get_diversity_metrics(is_training=True)
+                
+                # Log diversity metrics every 100 steps
+                # Use _last_logged_step to prevent duplicate logging during gradient accumulation
+                current_step = self.state.global_step
+                should_log = (current_step > 0 and 
+                             current_step % 100 == 0 and 
+                             current_step != self._last_logged_step)
+                
+                if should_log:
+                    self._last_logged_step = current_step
                     self.log({
                         "train_theme_entropy": metrics['entropy'],
                         "train_theme_coverage": metrics['coverage'],
                         "train_unique_themes": metrics['unique_themes']
                     })
+                
+                # Check for early stopping - more frequently as we approach 100%
+                # Only check once per step (not during each gradient accumulation sub-step)
+                if current_step != getattr(self, '_last_coverage_check_step', -1):
+                    check_threshold = False
+                    if metrics['coverage'] >= 0.95:
+                        # Check every step when we're close
+                        check_threshold = True
+                    elif metrics['coverage'] >= 0.90:
+                        # Check every 10 steps when we're getting close
+                        check_threshold = (current_step % 10 == 0)
+                    elif current_step % 100 == 0:
+                        # Otherwise check every 100 steps
+                        check_threshold = True
+                    
+                    if check_threshold:
+                        self._last_coverage_check_step = current_step
+                        
+                        if metrics['coverage'] >= 1.0:
+                            logger.info("\n" + "="*70)
+                            logger.info("🎯 THEME COVERAGE REACHED 100%! STOPPING TRAINING...")
+                            logger.info("="*70)
+                            logger.info(f"   • Step: {current_step}")
+                            logger.info(f"   • Epoch: {self.state.epoch:.2f}")
+                            logger.info(f"   • Unique themes seen: {metrics['unique_themes']}")
+                            logger.info(f"   • Total known themes: {len(self.theme_tracker.global_theme_dist)}")
+                            logger.info(f"   • Shannon entropy: {metrics['entropy']:.3f}")
+                            logger.info(f"   • Total theme occurrences: {metrics['total_occurrences']:,}")
+                            logger.info("="*70 + "\n")
+                            
+                            # Set should_training_stop flag to trigger graceful stop
+                            self.control.should_training_stop = True
 
             except Exception as e:
                 # Don't crash training if theme tracking fails
@@ -742,7 +794,7 @@ class ThemeAwareTrainer(Trainer):
 class TrainingLogger(TrainerCallback):
     """Custom callback to log and visualize training metrics with semantic tracking"""
     
-    def __init__(self, output_dir, theme_tracker: Optional[ThemeTracker] = None):
+    def __init__(self, output_dir, theme_tracker: Optional[ThemeTracker] = None, checkpoint_path: Optional[str] = None):
         self.output_dir = Path(output_dir)
         self.theme_tracker = theme_tracker
         self.metrics = {
@@ -762,7 +814,139 @@ class TrainingLogger(TrainerCallback):
             'eval_theme_coverage': [],
         }
         self.start_time = time.time()
+        self.resumed_from_checkpoint = False
+        self.checkpoint_start_step = 0
+        self.checkpoint_start_time = None
+        self._step_to_idx = {}  # Map step -> index for fast lookup
         
+        # For calculating speed metrics ourselves
+        self._last_speed_calc_time = None
+        self._last_speed_calc_step = 0
+        
+        # Try to load existing metrics if resuming
+        # First check main output dir, then look in checkpoint folders
+        metrics_file = None
+        
+        # Check main output directory first
+        main_metrics = self.output_dir / "training_metrics.json"
+        if main_metrics.exists():
+            metrics_file = main_metrics
+        else:
+            # Look for the latest checkpoint's metrics
+            checkpoint_dirs = sorted(
+                [d for d in self.output_dir.iterdir() 
+                 if d.is_dir() and d.name.startswith("checkpoint-")],
+                key=lambda x: int(x.name.split("-")[-1]),
+                reverse=True  # Latest checkpoint first
+            ) if self.output_dir.exists() else []
+            
+            for ckpt_dir in checkpoint_dirs:
+                ckpt_metrics = ckpt_dir / "training_metrics.json"
+                if ckpt_metrics.exists():
+                    metrics_file = ckpt_metrics
+                    logger.info(f"📂 Found metrics in checkpoint folder: {ckpt_dir.name}")
+                    break
+        
+        if metrics_file and metrics_file.exists():
+            try:
+                with open(metrics_file, 'r') as f:
+                    saved_metrics = json.load(f)
+                    
+                    # Validate and merge saved metrics
+                    # Only replace keys that exist in saved_metrics, keep defaults for new keys
+                    for key in self.metrics:
+                        if key in saved_metrics and isinstance(saved_metrics[key], list):
+                            self.metrics[key] = saved_metrics[key]
+                    
+                    self.resumed_from_checkpoint = True
+                    if self.metrics['step']:
+                        self.checkpoint_start_step = max(self.metrics['step'])
+                        # Build step->index map
+                        self._step_to_idx = {step: idx for idx, step in enumerate(self.metrics['step'])}
+                        
+                        # Ensure all metric lists are at least as long as step list
+                        base_length = len(self.metrics['step'])
+                        for key in self.metrics:
+                            if key not in ['step', 'epoch']:
+                                while len(self.metrics[key]) < base_length:
+                                    self.metrics[key].append(None)
+                    
+                    logger.info(f"📊 Loaded previous metrics: {len(self.metrics['step'])} steps up to step {self.checkpoint_start_step}")
+            except Exception as e:
+                logger.warning(f"Could not load previous metrics: {e}")
+        
+        # Also detect resuming from checkpoint path (fallback if metrics file was deleted)
+        if checkpoint_path and not self.resumed_from_checkpoint:
+            try:
+                # Extract step from checkpoint path like "checkpoint-4200"
+                ckpt_name = Path(checkpoint_path).name
+                if ckpt_name.startswith("checkpoint-"):
+                    step = int(ckpt_name.split("-")[-1])
+                    self.resumed_from_checkpoint = True
+                    self.checkpoint_start_step = step
+                    logger.info(f"📊 Detected resume from checkpoint at step {step} (no metrics file found)")
+            except (ValueError, AttributeError):
+                pass
+    
+    def set_checkpoint_info(self, checkpoint_path: str):
+        """Allow setting checkpoint info after initialization (useful when checkpoint is found later)"""
+        if checkpoint_path and not self.resumed_from_checkpoint:
+            try:
+                ckpt_name = Path(checkpoint_path).name
+                if ckpt_name.startswith("checkpoint-"):
+                    step = int(ckpt_name.split("-")[-1])
+                    self.resumed_from_checkpoint = True
+                    self.checkpoint_start_step = step
+                    logger.info(f"📊 Updated: will resume from step {step}")
+            except (ValueError, AttributeError):
+                pass
+        
+    def on_train_begin(self, args, state, control, **kwargs):
+        """Called at the beginning of training or when resuming"""
+        # NOTE: state.global_step is 0 at this point even when resuming - 
+        # the trainer loads checkpoint state AFTER on_train_begin fires.
+        # So we rely on self.resumed_from_checkpoint flag set in __init__
+        # based on the existence of saved metrics.
+        if self.resumed_from_checkpoint and self.checkpoint_start_step > 0:
+            # We're resuming from a checkpoint
+            # self.checkpoint_start_step was already set in __init__ from saved metrics
+            self.checkpoint_start_time = time.time()
+            self._last_speed_calc_time = self.checkpoint_start_time
+            self._last_speed_calc_step = self.checkpoint_start_step
+            logger.info(f"🔄 Resuming training from step {self.checkpoint_start_step}")
+        else:
+            # Fresh training start
+            self.start_time = time.time()
+            self.checkpoint_start_time = self.start_time
+            self._last_speed_calc_time = self.start_time
+            self._last_speed_calc_step = 0
+            logger.info("🆕 Starting fresh training run")
+    
+    def _get_or_create_step_index(self, step, epoch):
+        """Get index for a step, creating a new entry if needed"""
+        if step in self._step_to_idx:
+            return self._step_to_idx[step]
+        
+        # Create new entry
+        idx = len(self.metrics['step'])
+        self.metrics['step'].append(step)
+        self.metrics['epoch'].append(epoch)
+        self._step_to_idx[step] = idx
+        
+        # Extend all other metric lists with None
+        for key in self.metrics:
+            if key not in ['step', 'epoch']:
+                while len(self.metrics[key]) < len(self.metrics['step']):
+                    self.metrics[key].append(None)
+        
+        return idx
+    
+    def _set_metric(self, key, idx, value):
+        """Set a metric value at a specific index, extending list if needed"""
+        while len(self.metrics[key]) <= idx:
+            self.metrics[key].append(None)
+        self.metrics[key][idx] = value
+    
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         """Called when logging occurs"""
         if logs is None:
@@ -771,72 +955,51 @@ class TrainingLogger(TrainerCallback):
         current_step = state.global_step
         current_epoch = state.epoch
         
-        # Store basic info
-        if current_step not in self.metrics['step']:
-            self.metrics['step'].append(current_step)
-            self.metrics['epoch'].append(current_epoch)
+        # Get or create index for this step
+        idx = self._get_or_create_step_index(current_step, current_epoch)
         
         # Store available metrics
         if 'loss' in logs:
-            if len(self.metrics['train_loss']) < len(self.metrics['step']):
-                self.metrics['train_loss'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_loss'])))
-            if len(self.metrics['train_loss']) == len(self.metrics['step']):
-                self.metrics['train_loss'][-1] = logs['loss']
-            else:
-                self.metrics['train_loss'].append(logs['loss'])
+            self._set_metric('train_loss', idx, logs['loss'])
                 
         if 'eval_loss' in logs:
-            if len(self.metrics['eval_loss']) < len(self.metrics['step']):
-                self.metrics['eval_loss'].extend([None] * (len(self.metrics['step']) - len(self.metrics['eval_loss'])))
-            if len(self.metrics['eval_loss']) == len(self.metrics['step']):
-                self.metrics['eval_loss'][-1] = logs['eval_loss']
-            else:
-                self.metrics['eval_loss'].append(logs['eval_loss'])
+            self._set_metric('eval_loss', idx, logs['eval_loss'])
                 
         if 'learning_rate' in logs:
-            if len(self.metrics['learning_rate']) < len(self.metrics['step']):
-                self.metrics['learning_rate'].extend([None] * (len(self.metrics['step']) - len(self.metrics['learning_rate'])))
-            if len(self.metrics['learning_rate']) == len(self.metrics['step']):
-                self.metrics['learning_rate'][-1] = logs['learning_rate']
-            else:
-                self.metrics['learning_rate'].append(logs['learning_rate'])
+            self._set_metric('learning_rate', idx, logs['learning_rate'])
                 
         if 'grad_norm' in logs:
-            if len(self.metrics['grad_norm']) < len(self.metrics['step']):
-                self.metrics['grad_norm'].extend([None] * (len(self.metrics['step']) - len(self.metrics['grad_norm'])))
-            if len(self.metrics['grad_norm']) == len(self.metrics['step']):
-                self.metrics['grad_norm'][-1] = logs['grad_norm']
-            else:
-                self.metrics['grad_norm'].append(logs['grad_norm'])
+            self._set_metric('grad_norm', idx, logs['grad_norm'])
 
-        # --- PATCHED IN ---
-        # NEW: Handle theme metrics logged from ThemeAwareTrainer
+        # Handle theme metrics logged from ThemeAwareTrainer
         if 'train_theme_entropy' in logs:
-            if len(self.metrics['train_theme_diversity']) < len(self.metrics['step']):
-                self.metrics['train_theme_diversity'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_theme_diversity'])))
-            if len(self.metrics['train_theme_diversity']) == len(self.metrics['step']):
-                self.metrics['train_theme_diversity'][-1] = logs['train_theme_entropy']
-            else:
-                self.metrics['train_theme_diversity'].append(logs['train_theme_entropy'])
+            self._set_metric('train_theme_diversity', idx, logs['train_theme_entropy'])
                 
         if 'train_theme_coverage' in logs:
-            if len(self.metrics['train_theme_coverage']) < len(self.metrics['step']):
-                self.metrics['train_theme_coverage'].extend([None] * (len(self.metrics['step']) - len(self.metrics['train_theme_coverage'])))
-            if len(self.metrics['train_theme_coverage']) == len(self.metrics['step']):
-                self.metrics['train_theme_coverage'][-1] = logs['train_theme_coverage']
-            else:
-                self.metrics['train_theme_coverage'].append(logs['train_theme_coverage'])
-        # --- END PATCH ---
+            self._set_metric('train_theme_coverage', idx, logs['train_theme_coverage'])
                 
-        # Performance metrics
-        for key in ['train_runtime', 'train_samples_per_second', 'train_steps_per_second']:
-            if key in logs:
-                if len(self.metrics[key]) < len(self.metrics['step']):
-                    self.metrics[key].extend([None] * (len(self.metrics['step']) - len(self.metrics[key])))
-                if len(self.metrics[key]) == len(self.metrics['step']):
-                    self.metrics[key][-1] = logs[key]
-                else:
-                    self.metrics[key].append(logs[key])
+        # Calculate our own speed metrics since HuggingFace doesn't log them consistently
+        current_time = time.time()
+        if self._last_speed_calc_time and current_step > self._last_speed_calc_step:
+            elapsed = current_time - self._last_speed_calc_time
+            steps_done = current_step - self._last_speed_calc_step
+            
+            if elapsed > 0:
+                steps_per_second = steps_done / elapsed
+                # Effective batch size = per_device_batch * gradient_accumulation
+                effective_batch = args.per_device_train_batch_size * args.gradient_accumulation_steps
+                samples_per_second = steps_per_second * effective_batch
+                
+                self._set_metric('train_steps_per_second', idx, steps_per_second)
+                self._set_metric('train_samples_per_second', idx, samples_per_second)
+        
+        # Update tracking for next calculation
+        self._last_speed_calc_time = current_time
+        self._last_speed_calc_step = current_step
+        
+        # Also capture any speed metrics that HuggingFace does provide
+        if 'train_runtime' in logs:
+            self._set_metric('train_runtime', idx, logs['train_runtime'])
     
     def on_evaluate(self, args, state, control, model=None, metrics=None, **kwargs):
         """Called after evaluation - track semantic diversity"""
@@ -850,22 +1013,22 @@ class TrainingLogger(TrainerCallback):
             logger.info(f"   • Entropy: {diversity_metrics['entropy']:.3f}")
             logger.info(f"   • Coverage: {diversity_metrics['coverage']:.1%}")
             
-            # Store in metrics
+            # Store in metrics using helper methods
             current_step = state.global_step
-            if current_step in self.metrics['step']:
-                idx = self.metrics['step'].index(current_step)
-                
-                # Pad lists if needed
-                for key in ['eval_theme_diversity', 'eval_theme_coverage']:
-                    if len(self.metrics[key]) < len(self.metrics['step']):
-                        self.metrics[key].extend([None] * (len(self.metrics['step']) - len(self.metrics[key])))
-                
-                self.metrics['eval_theme_diversity'][idx] = diversity_metrics['entropy']
-                self.metrics['eval_theme_coverage'][idx] = diversity_metrics['coverage']
+            current_epoch = state.epoch if state.epoch else 0
+            idx = self._get_or_create_step_index(current_step, current_epoch)
+            
+            self._set_metric('eval_theme_diversity', idx, diversity_metrics['entropy'])
+            self._set_metric('eval_theme_coverage', idx, diversity_metrics['coverage'])
     
     def on_save(self, args, state, control, model=None, **kwargs):
         """Called when model checkpoint is saved"""
         checkpoint_dir = self.output_dir / f"checkpoint-{state.global_step}"
+        
+        # Always save to main output directory (for full history)
+        self.save_metrics_and_plots(self.output_dir)
+        
+        # Also save to checkpoint directory (for checkpoint-specific snapshot)
         self.save_metrics_and_plots(checkpoint_dir)
         
         # Save theme tracker state if available
@@ -1339,6 +1502,7 @@ def load_tokenized_cache(cache_path):
             from datasets import load_from_disk
             dataset = load_from_disk(cache_path)
             logger.info(f"⚡ Loaded tokenized dataset from cache: {cache_path}")
+            logger.info(f"⚡ Any issues remove {cache_path}")
             return dataset
     except Exception as e:
         logger.warning(f"⚠️ Failed to load dataset cache: {e}")
@@ -1358,7 +1522,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-4b-it-qat-int4-unquantized"):
+    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -1415,11 +1579,22 @@ class RhizomeTrainer:
                         bnb_4bit_use_double_quant=True,
                     )
                     
+                    # Calculate max memory dynamically from GPU info
+                    max_mem_config = None
+                    if not USE_CPU_ONLY and torch.cuda.is_available():
+                        gpu_mem_bytes = torch.cuda.get_device_properties(0).total_memory
+                        # Use 95% of available VRAM (leave headroom for PyTorch overhead)
+                        usable_mem_bytes = int(gpu_mem_bytes * 0.95)
+                        usable_mem_gb = usable_mem_bytes / (1024**3)
+                        max_mem_config = {0: f"{usable_mem_gb:.1f}GB"}
+                        logger.info(f"💾 GPU memory: {gpu_mem_bytes / (1024**3):.1f}GB total, using {usable_mem_gb:.1f}GB")
+                    
                     self.model = AutoModelForCausalLM.from_pretrained(
                         self.model_name,
                         quantization_config=bnb_config,
                         device_map="auto" if not USE_CPU_ONLY else "cpu",
                         low_cpu_mem_usage=True,
+                        max_memory=max_mem_config,
                     )
                     
                     # Prepare model for k-bit training
@@ -1461,12 +1636,12 @@ class RhizomeTrainer:
 
             # Configure LoRA adapters
             lora_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                qalora_group_size=32,
+                r=8,
+                lora_alpha=16,
+                #qalora_group_size=16,
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
-                bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
+                bias="none", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
                 task_type=TaskType.CAUSAL_LM,
                 fan_in_fan_out=fan_in_fan_out
             )
@@ -1651,12 +1826,14 @@ class RhizomeTrainer:
             default_grad_accum = 4  # To achieve effective batch of 16
             default_fp16 = False
             default_gradient_checkpointing = False
+            #deepspeed_config = None
         else:
             # GPU defaults
             default_batch_size = 2
             default_grad_accum = 8
             default_fp16 = True
             default_gradient_checkpointing = True
+            #deepspeed_config = "deepspeed_config.json"
         
         default_args = {
             "output_dir": output_dir,
@@ -1669,7 +1846,7 @@ class RhizomeTrainer:
             "warmup_steps": 100,
             "logging_steps": 25,
             "save_steps": 150,
-            "save_total_limit": 2,
+            "save_total_limit": 5,
             "eval_strategy": "steps" if has_validation else "no", # Use old name, as per error
             "eval_steps": 150 if has_validation else None,
             "save_strategy": "steps",
@@ -1677,6 +1854,7 @@ class RhizomeTrainer:
             "metric_for_best_model": "eval_loss" if has_validation else None,
             "greater_is_better": False,
             "save_safetensors": True,
+            "dataloader_num_workers": 0,
             "dataloader_pin_memory": True if not USE_CPU_ONLY else False,  # CPU optimization
             "remove_unused_columns": True,
             "seed": 42,
@@ -1690,6 +1868,7 @@ class RhizomeTrainer:
             "log_level_replica": "error",
             "logging_nan_inf_filter": False,
             "log_on_each_node": False,
+            #"deepspeed": deepspeed_config,
         }
         
         default_args["use_cpu"] = USE_CPU_ONLY
@@ -1744,6 +1923,13 @@ class RhizomeTrainer:
             # Step 3: Configure training arguments
             self.print_section("Training Configuration", "⚙️")
             has_validation = "validation" in tokenized_dataset
+            
+            # DataLoader worker seeding setup
+            if training_kwargs.get("dataloader_num_workers", 0) > 0:
+                logger.info(f"Configuring DataLoader with worker_init_fn for {training_kwargs.get('dataloader_num_workers')} workers.")
+                training_kwargs['dataloader_worker_init_fn'] = seed_worker
+            else:
+                logger.info("DataLoader num_workers is 0, worker_init_fn not applied.")
 
             training_args = self.create_training_args(
                 output_dir=output_dir,
@@ -1840,6 +2026,10 @@ class RhizomeTrainer:
             checkpoint_dir_path = Path(output_dir)
             last_checkpoint_path = self.find_last_checkpoint(checkpoint_dir_path)
             
+            # Update the training logger with checkpoint info if found
+            if last_checkpoint_path:
+                training_logger.set_checkpoint_info(last_checkpoint_path)
+            
             # WARNING: If resuming with different quantization settings, clear checkpoints
             if last_checkpoint_path and USE_QLORA:
                 logger.warning("⚠️ Found existing checkpoint, QLoRA is enabled.")
@@ -1850,7 +2040,7 @@ class RhizomeTrainer:
             
             if last_checkpoint_path:
                 logger.info(f"🔄 Resuming training from checkpoint: {last_checkpoint_path}")
-                logger.info("💡 You should see CPU activity in htop or nvtop - if not, something is wrong")
+                logger.info("💡 You should see activity in htop or nvtop - if not, something is wrong")
                 
                 # Restore theme tracker state if available
                 theme_state_path = Path(last_checkpoint_path) / 'theme_tracker_state.json'
@@ -1881,7 +2071,8 @@ class RhizomeTrainer:
 
             else:
                 logger.info("🎯 Starting fresh training run...")
-                logger.info("💡 You should see CPU activity in htop or nvtop - if not, something is wrong")
+                logger.info("⏳ First step with QLoRA may take 5-10 minutes to initialize...")
+                logger.info("💡 You should see activity in htop or nvtop - if not, something is wrong")
                 logger.info("🚀 Starting training loop...")
                 trainer.train()
             
@@ -1958,7 +2149,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="google/gemma-3-4b-it-qat-int4-unquantized")
+    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
     
     try:
         # Call the main training function with desired parameters
@@ -1984,6 +2175,7 @@ def main():
             warmup_steps=100,
             logging_steps=25,
             save_steps=150,
+            dataloader_num_workers=0,
         )
         
         if result:
