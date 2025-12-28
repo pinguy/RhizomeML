@@ -1636,12 +1636,12 @@ class RhizomeTrainer:
 
             # Configure LoRA adapters
             lora_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                qalora_group_size = 18, # Any higher and it starts chatting with itself like “<|user|>Hello<|assistant|>Hi<|endoftext|>WAIT THERE’S MORE DATA HERE!”
+                r=8, # for small models up to 16
+                lora_alpha=16, # small models 32
+                #qalora_group_size = 16, # Any higher and it starts chatting with itself like “<|user|>Hello<|assistant|>Hi<|endoftext|>WAIT THERE’S MORE DATA HERE!”
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
-                bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
+                bias="none", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
                 task_type=TaskType.CAUSAL_LM,
                 fan_in_fan_out=fan_in_fan_out
             )
