@@ -1,5 +1,5 @@
 import os
-# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
+# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -512,7 +512,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "google/gemma-3-1b-it-qat-int4-unquantized")
+        model_name: The model name or path (e.g., "google/gemma-3-4b-it-qat-int4-unquantized")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -1522,7 +1522,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
+    def __init__(self, model_name="google/gemma-3-4b-it-qat-int4-unquantized"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -1638,7 +1638,7 @@ class RhizomeTrainer:
             lora_config = LoraConfig(
                 r=16,
                 lora_alpha=32,
-                qalora_group_size = 18 # Any higher and it starts chatting with itself like “<|user|>Hello<|assistant|>Hi<|endoftext|>WAIT THERE’S MORE DATA HERE!”
+                qalora_group_size = 18, # Any higher and it starts chatting with itself like “<|user|>Hello<|assistant|>Hi<|endoftext|>WAIT THERE’S MORE DATA HERE!”
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
                 bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
@@ -2141,7 +2141,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
+    trainer = RhizomeTrainer(model_name="google/gemma-3-4b-it-qat-int4-unquantized")
     
     try:
         # Call the main training function with desired parameters
