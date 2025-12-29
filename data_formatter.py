@@ -1,4 +1,4 @@
-# Run with this for CPU only: python3 data_formatter_patched.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid 
+# Run with this for CPU only: python3 data_formatter_optimized.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid 
 # Enabling --extract-keyphrases runs very slow but improves semantic themes
 
 
@@ -1763,8 +1763,11 @@ class OptimizedDataProcessor:
             with open(path, "w", encoding="utf-8") as f:
                 for item in data:
                     # Include source_metadata with normalized types for theme-weighted sampling
+                    # MODIFIED: Include input/output to support Loss Masking
                     formatted = {
                         "text": item['text'],
+                        "input": item.get('user', ''),
+                        "output": item.get('assistant', ''),
                         "source_metadata": normalize_metadata_types(item.get('source_metadata', {}))
                     }
                     f.write(json.dumps(formatted, ensure_ascii=False) + "\n")
