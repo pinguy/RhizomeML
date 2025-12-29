@@ -97,7 +97,8 @@ python3 batch_embedder.py
 python3 data_formatter.py \
     --enable-semantic-labeling \
     --semantic-mode normal \
-    --semantic-method hybrid
+    --semantic-method hybrid \
+    --batch-size 256 # Larger uses more compute but faster
 ```
 Add `--force-cpu` to use the CPU.
 
@@ -193,7 +194,7 @@ source venv_gguf/bin/activate
 pip3 install --use-deprecated=legacy-resolver peft
 
 python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
-python3 convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
+python3 convert_to_gguf.py --quant q2_k  # No quantization (can go as small as q2_k - 2-bit)
 python3 convert_to_gguf.py --gpu        # Build with CUDA (default)
 python3 convert_to_gguf.py --cpu        # Build without CUDA (CPU-only)
 
