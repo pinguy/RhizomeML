@@ -2530,7 +2530,7 @@ def process_voice_to_chat_streaming(audio_file_path: str, history: List, enable_
         return
     
     for update in chatbot.chat_response_streaming(
-        transcribed_text, history, enable_tts, voice_val, 
+        transcribed_text, history, enable_tts, voice, 
         speed, show_reasoning, use_ucs, temperature, top_p, int(top_k), int(max_tokens), system_prompt,
         stream_tts, tts_chunk_mode
     ):
