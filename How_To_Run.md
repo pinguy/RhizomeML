@@ -194,7 +194,7 @@ source venv_gguf/bin/activate
 pip3 install --use-deprecated=legacy-resolver peft
 
 python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
-python3 convert_to_gguf.py --quant q2_k  # No quantization (can go as small as q2_k - 2-bit)
+python3 convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
 python3 convert_to_gguf.py --gpu        # Build with CUDA (default)
 python3 convert_to_gguf.py --cpu        # Build without CUDA (CPU-only)
 
