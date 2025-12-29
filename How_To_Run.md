@@ -14,7 +14,7 @@ sudo reboot
 
 **Note:** Tested and known to work on the `5.11.16_lowlatency` kernel for older distributions. Newer kernels are recommended where available.
 
-### Running on Older Distros Using Distrobox
+### Running Using Distrobox
 
 ```bash
 # Clone Distrobox
