@@ -2,6 +2,9 @@ FROM ubuntu:22.04
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Fix DNS resolution early so apt/pip can reach mirrors
+RUN echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+
 # Install system packages
 RUN apt update && apt install --fix-missing -y \
     python3 \
