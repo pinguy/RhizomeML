@@ -12,7 +12,6 @@ llama-cpp-python
 numpy
 scikit-learn
 matplotlib
-pillow
 psutil
 tqdm
 pyyaml
