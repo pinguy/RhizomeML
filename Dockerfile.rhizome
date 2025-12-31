@@ -20,10 +20,6 @@ RUN apt update && apt install --fix-missing -y \
     nano \
     nvtop \
     htop \
-    libcanberra-gtk-module \
-    libcanberra-gtk3-module \
-    libxcb-cursor0 \
-    python3-pyqt5 \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
 # Use tini as init
