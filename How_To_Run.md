@@ -42,7 +42,9 @@ sudo apt install nvidia-container-toolkit
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 
 # Build the image. Download the Dockerfile.rhizome file from the repo.
-mkdir -p ~/tmp-podman
+docker pull ubuntu:22.04
+docker save ubuntu:22.04 -o ubuntu-22.04.tar
+podman load -i ubuntu-22.04.tar
 podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create container with nvidia passthrough
