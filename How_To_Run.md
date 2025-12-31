@@ -47,11 +47,14 @@ podman rm --all --force
 podman rmi --all --force
 rm -rf ~/.local/share/containers ~/.config/containers
 
-# Prepare build directory for large image builds ---
+# Prepare build directory for large image builds
 mkdir -p ~/.podman-tmp
 
 # Build the image (ensure Dockerfile.rhizome is in the current directory)
 TMPDIR=$HOME/.podman-tmp podman build -t rhizome-img -f Dockerfile.rhizome
+
+# If you encounter an 'unexpected EOF' error, rerun this command until it completes successfully, then rebuild the image
+podman pull ubuntu:22.04
 
 # Create a Distrobox container with NVIDIA passthrough
 distrobox create --name rhizome-dev --image rhizome-img --nvidia
