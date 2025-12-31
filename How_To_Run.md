@@ -56,11 +56,6 @@ TMPDIR=$HOME/.podman-tmp podman build \
   -t rhizome-img \
   -f Dockerfile.rhizome
 
-# Only needed if you hit unexpected EOF pulling ubuntu:22.04
-docker pull ubuntu:22.04
-docker save ubuntu:22.04 -o ubuntu-22.04.tar
-podman load -i ubuntu-22.04.tar
-
 # Create container with nvidia passthrough
 distrobox create --name rhizome-dev --image rhizome-img --nvidia
 distrobox enter rhizome-dev # May hang or fail a few times. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go through then will be fine.
