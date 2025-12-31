@@ -1,58 +1,26 @@
 FROM ubuntu:22.04
-
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Fix apt sources and add fallback mirrors
-RUN rm -f /etc/apt/sources.list.d/*.list && \
-    echo "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse" > /etc/apt/sources.list && \
-    echo "deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse" >> /etc/apt/sources.list
-
-# Update package index with retry logic
-RUN apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    apt-get update --fix-missing || \
-    (sleep 5 && apt-get update --fix-missing) || \
-    (sleep 10 && apt-get update --fix-missing)
-
-# Install system packages in logical groups with better error handling
-RUN apt-get install -y --no-install-recommends \
+# Install system packages
+RUN apt update && apt install --fix-missing -y \
     python3 \
     python3-pip \
     python3-venv \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
+    tini \
     curl \
     wget \
-    tini \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     sudo \
     procps \
-    nano \
-    htop \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install multimedia packages (optional - comment out if not needed)
-RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# nvtop requires special handling - install separately and handle failure gracefully
-RUN apt-get update && \
-    (apt-get install -y --no-install-recommends nvtop || echo "nvtop install failed - skipping") && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    nano \
+    nvtop \
+    htop \
+    && apt clean && rm -rf /var/lib/apt/lists/*
 
 # Use tini as init
 ENTRYPOINT ["/usr/bin/tini", "--"]
@@ -61,26 +29,19 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 WORKDIR /app
 
 # Upgrade pip to avoid resolver bugs
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip3 install --upgrade pip
 
-# Install CUDA 12.4 toolkit (only if you need GPU support)
-# Comment out this entire section if running CPU-only
+# Install CUDA 12.4 toolkit
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget gnupg2 ca-certificates && \
+    apt-get install --fix-missing -y wget && \
     wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
-    rm cuda-keyring_1.1-1_all.deb && \
     apt-get update && \
-    apt-get install -y --no-install-recommends cuda-toolkit-12-4 && \
+    apt-get install --fix-missing -y cuda-toolkit-12-4 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set CUDA environment variables
-ENV PATH=/usr/local/cuda-12.4/bin:${PATH}
-ENV LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
-
-# Optional: Add non-root user
-# RUN useradd -m -s /bin/bash rhizome && \
-#     echo "rhizome ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# Optional: Add user (if you want to avoid running as root)
+# RUN useradd -ms /bin/bash rhizome && echo "rhizome ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 # USER rhizome
 # WORKDIR /home/rhizome
 
