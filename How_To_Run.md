@@ -41,17 +41,31 @@ sudo apt install nvidia-container-toolkit
 # Configure for podman
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 
+# If you had a pass failed install - To start fresh
+podman stop --all
+podman rm --all --force
+podman rmi --all --force
+rm -rf ~/.local/share/containers
+rm -rf ~/.config/containers
+
 # Build the image. Download the Dockerfile.rhizome file from the repo.
+mkdir -p ~/.podman-tmp
+
+TMPDIR=$HOME/.podman-tmp podman build \
+  --format docker \
+  -t rhizome-img \
+  -f Dockerfile.rhizome
+
+# Only needed if you hit unexpected EOF pulling ubuntu:22.04
 docker pull ubuntu:22.04
 docker save ubuntu:22.04 -o ubuntu-22.04.tar
 podman load -i ubuntu-22.04.tar
-podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create container with nvidia passthrough
 distrobox create --name rhizome-dev --image rhizome-img --nvidia
 distrobox enter rhizome-dev # May hang or fail a few times. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go through then will be fine.
 
-distrobox-stop --all # To try again.
+distrobox stop rhizome-dev # To try again.
 
 ```
 
