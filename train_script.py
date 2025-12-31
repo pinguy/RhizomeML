@@ -1,5 +1,5 @@
 import os
-# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
+# Replace "google/gemma-3-4b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -512,7 +512,7 @@ def determine_fan_in_fan_out(model_name: str) -> bool:
     Determine the appropriate fan_in_fan_out setting for LoRA based on model architecture.
     
     Args:
-        model_name: The model name or path (e.g., "google/gemma-3-1b-it-qat-int4-unquantized")
+        model_name: The model name or path (e.g., "google/gemma-3-4b-it-qat-int4-unquantized")
     
     Returns:
         bool: True for Falcon-style models, False for DeepSeek/Qwen/most modern architectures
@@ -1353,24 +1353,35 @@ class TrainingLogger(TrainerCallback):
         plt.close()
 
 @dataclass
-class CustomDataCollator:
+class LossMaskedDataCollator:
     """
-    An optimized data collator for language modeling tasks.
-    It efficiently pads input sequences to the maximum length within each batch or a global max_length,
-    and prepares labels for causal language modeling.
+    Data collator with proper loss masking for instruction-tuned models.
+    
+    Masks loss for:
+    1. Padding tokens (standard)
+    2. Input/prompt tokens (only train on outputs)
+    3. Tokens after <|endoftext|> (prevent learning beyond EOS)
+    
+    This ensures the model learns to:
+    - Only generate assistant responses (not user prompts)
+    - Stop at <|endoftext|> tokens
+    - Not continue generating after completion
     """
     tokenizer: Any
     max_length: int = 512
+    mask_prompt: bool = True  # Mask loss on user input
+    mask_after_eos: bool = True  # Mask loss after <|endoftext|>
     
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         batch_size = len(features)
-        # Determine the maximum sequence length for the current batch, capped by self.max_length
+        
+        # Determine the maximum sequence length for the current batch
         max_len = min(
             max(len(f["input_ids"]) for f in features),
             self.max_length
         )
         
-        # Identify the padding token ID
+        # Get special token IDs
         pad_token_id = self.tokenizer.pad_token_id
         if pad_token_id is None:
             logger.warning("Tokenizer does not have a pad_token_id. Using eos_token_id for padding.")
@@ -1378,22 +1389,74 @@ class CustomDataCollator:
         
         if pad_token_id is None:
             raise ValueError("No pad_token_id or eos_token_id found in tokenizer. Cannot pad sequences.")
-
+        
+        # Get EOS token ID (for masking after completion)
+        eos_token_id = self.tokenizer.eos_token_id
+        if eos_token_id is None:
+            logger.warning("No eos_token_id found. Cannot mask after EOS.")
+            eos_token_id = -1  # Impossible value
+        
         # Pre-allocate tensors for efficiency
         input_ids = torch.full((batch_size, max_len), pad_token_id, dtype=torch.long)
         attention_mask = torch.zeros((batch_size, max_len), dtype=torch.long)
+        labels = torch.full((batch_size, max_len), -100, dtype=torch.long)  # -100 = ignore in loss
         
         for i, feature in enumerate(features):
             ids = feature["input_ids"][:max_len]
             seq_len = len(ids)
             
+            # Set input_ids and attention_mask
             input_ids[i, :seq_len] = torch.tensor(ids, dtype=torch.long)
             attention_mask[i, :seq_len] = 1
+            
+            # Initialize labels (copy of input_ids)
+            labels[i, :seq_len] = torch.tensor(ids, dtype=torch.long)
+            
+            # ============================================================
+            # LOSS MASKING LOGIC
+            # ============================================================
+            
+            # 1. Mask padding tokens (standard)
+            labels[i, seq_len:] = -100
+            
+            # 2. Mask prompt/input tokens (only train on assistant responses)
+            if self.mask_prompt and "input" in feature and "output" in feature:
+                # Tokenize input and output separately to find boundary
+                input_text = feature["input"]
+                
+                # Format according to your template
+                formatted_input = f"<|user|>{input_text}<|assistant|>"
+                
+                # Tokenize just the prompt part
+                prompt_ids = self.tokenizer.encode(
+                    formatted_input,
+                    add_special_tokens=False,
+                    truncation=True,
+                    max_length=max_len
+                )
+                
+                prompt_len = len(prompt_ids)
+                
+                # Mask all tokens in the prompt (we only want to learn the output)
+                if prompt_len < seq_len:
+                    labels[i, :prompt_len] = -100
+            
+            # 3. Mask tokens after <|endoftext|> (prevent learning beyond EOS)
+            if self.mask_after_eos and eos_token_id != -1:
+                # Find first occurrence of EOS token
+                ids_tensor = input_ids[i, :seq_len]
+                eos_positions = (ids_tensor == eos_token_id).nonzero(as_tuple=True)[0]
+                
+                if len(eos_positions) > 0:
+                    first_eos_pos = eos_positions[0].item()
+                    # Mask everything AFTER the first <|endoftext|> (but keep the EOS token itself in loss)
+                    if first_eos_pos + 1 < seq_len:
+                        labels[i, first_eos_pos + 1:] = -100
         
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": input_ids.clone()
+            "labels": labels
         }
 
 def seed_worker(worker_id):
@@ -1517,12 +1580,45 @@ def load_tokenized_cache(cache_path):
             logger.warning(f"⚠️ Could not clean cache: {cleanup_error}")
     return None
 
+def setup_special_tokens(tokenizer, model):
+    """
+    Configure special tokens for instruction-tuned models.
+    
+    Ensures <|endoftext|> is properly recognized as EOS.
+    """
+    special_tokens = {
+        'pad_token': '<|pad|>',
+        'eos_token': '<|endoftext|>',
+        'bos_token': '<|startoftext|>',
+        'unk_token': '<|unk|>',
+    }
+    
+    # Add special tokens if not present
+    num_added = tokenizer.add_special_tokens({
+        k: v for k, v in special_tokens.items() 
+        if getattr(tokenizer, k, None) is None
+    })
+    
+    if num_added > 0:
+        logger.info(f"Added {num_added} special tokens to tokenizer")
+        # Resize model embeddings to match new tokenizer size
+        model.resize_token_embeddings(len(tokenizer))
+        logger.info(f"Resized model embeddings to {len(tokenizer)}")
+    
+    # Verify EOS token is set
+    if tokenizer.eos_token_id is None:
+        raise ValueError("EOS token not properly configured!")
+    
+    logger.info(f"✅ EOS token configured: '{tokenizer.eos_token}' (ID: {tokenizer.eos_token_id})")
+    
+    return tokenizer, model
+
 class RhizomeTrainer:
     """
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
+    def __init__(self, model_name="google/gemma-3-4b-it-qat-int4-unquantized"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -1538,7 +1634,7 @@ class RhizomeTrainer:
         print("🤖 RhizomeML Fine-Tuning Suite")
         print("   🎨 Now with Semantic Theme-Aware Training!")
         print("   ⚡ CPU-Optimized with QLoRA 4-bit Support!")
-        print("   Compatible with data_formatter.py output")
+        print("   🔒 Loss Masking Enabled (Smart Prompt + EOS Handling)")
         print("═" * 70)
         
     def print_section(self, title, emoji="📋"):
@@ -1627,6 +1723,10 @@ class RhizomeTrainer:
                     ).to(DEVICE)
             
             pbar.update(1)
+
+            # --- NEW: Setup Special Tokens for proper EOS recognition ---
+            # This is critical for preventing the model from generating past <|endoftext|>
+            self.tokenizer, self.model = setup_special_tokens(self.tokenizer, self.model)
             
             # Dynamically get LoRA target modules
             lora_target_modules = get_model_lora_targets(self.model)
@@ -1636,9 +1736,9 @@ class RhizomeTrainer:
 
             # Configure LoRA adapters
             lora_config = LoraConfig(
-                r=16, # for small models up to 16
-                lora_alpha=32, # small models 32
-                #qalora_group_size = 16, # Any higher and it starts chatting with itself like “<|user|>Hello<|assistant|>Hi<|endoftext|>WAIT THERE’S MORE DATA HERE!”
+                r=8,
+                lora_alpha=16,
+                #qalora_group_size = 16,
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
                 bias="none", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
@@ -1755,15 +1855,19 @@ class RhizomeTrainer:
             )
         
         print("\n🔄 Tokenizing dataset...")
-        # Keep original columns for theme tracking, remove them later
+        
+        # Identify columns to keep
+        # CRITICAL: We need to keep 'input' and 'output' columns for the LossMaskedDataCollator
         original_columns = dataset["train"].column_names
+        cols_to_keep = {"input", "output"} 
+        cols_to_remove = [c for c in original_columns if c not in cols_to_keep]
         
         tokenized_dataset = dataset.map(
             tokenize_function,
             batched=True,
             batch_size=1000,
             num_proc=1 if USE_CPU_ONLY else None,
-            remove_columns=original_columns, # <-- FIX 1: Add this line
+            remove_columns=cols_to_remove, # Only remove non-essential columns
             desc="Tokenizing"
         )
         logger.info("✅ Dataset tokenization complete.")
@@ -1804,9 +1908,6 @@ class RhizomeTrainer:
         self.original_train_dataset = dataset["train"]
         self.use_theme_weighting = use_theme_weighting and self.theme_tracker is not None
         
-        # Now remove original columns from the *tokenized* dataset
-        # tokenized_dataset = tokenized_dataset.remove_columns(original_columns) # <-- FIX 2: Delete this line
-
         # Save to cache
         if use_cache:
             save_tokenized_cache(tokenized_dataset, str(cache_dir))
@@ -1855,7 +1956,11 @@ class RhizomeTrainer:
             "greater_is_better": False,
             "save_safetensors": True,
             "dataloader_pin_memory": True if not USE_CPU_ONLY else False,  # CPU optimization
-            "remove_unused_columns": True,
+            
+            # CRITICAL: Set to False so we can pass 'input' and 'output' columns to the collator
+            # If True, Trainer will strip these columns before the collator sees them
+            "remove_unused_columns": False, 
+            
             "seed": 42,
             "fp16": default_fp16,
             "gradient_checkpointing": default_gradient_checkpointing,
@@ -1962,8 +2067,16 @@ class RhizomeTrainer:
                 else:
                     logger.info(f"⚪ Theme-weighted sampling: DISABLED")
             
-            # Step 4: Prepare data collator and custom logger
-            data_collator = CustomDataCollator(self.tokenizer, max_length=512)
+            # Step 4: Prepare data collator with loss masking
+            # REPLACED CustomDataCollator with LossMaskedDataCollator
+            logger.info("🛡️ Using LossMaskedDataCollator to prevent self-conversation")
+            data_collator = LossMaskedDataCollator(
+                self.tokenizer, 
+                max_length=512,
+                mask_prompt=True,      # Only train on assistant outputs
+                mask_after_eos=True    # Stop learning after <|endoftext|>
+            )
+
             training_logger = TrainingLogger(output_dir, theme_tracker=self.theme_tracker)
             
             # Step 5: Create theme-weighted sampler if enabled
@@ -2140,7 +2253,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
     
-    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
+    trainer = RhizomeTrainer(model_name="google/gemma-3-4b-it-qat-int4-unquantized")
     
     try:
         # Call the main training function with desired parameters
