@@ -41,26 +41,27 @@ sudo apt install nvidia-container-toolkit
 # Configure for podman
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 
-# If you had a pass failed install - To start fresh
+# If a previous install failed – FULL RESET
 podman stop --all
 podman rm --all --force
 podman rmi --all --force
 rm -rf ~/.local/share/containers
 rm -rf ~/.config/containers
 
-# Build the image. Download the Dockerfile.rhizome file from the repo.
+# Prepare stable temp dir for large builds
 mkdir -p ~/.podman-tmp
 
-TMPDIR=$HOME/.podman-tmp podman build \
-  --format docker \
-  -t rhizome-img \
-  -f Dockerfile.rhizome
+# Build the image. Download the Dockerfile.rhizome file from the repo.
+TMPDIR=$HOME/.podman-tmp podman build -t rhizome-img -f Dockerfile.rhizome
 
 # Create container with nvidia passthrough
 distrobox create --name rhizome-dev --image rhizome-img --nvidia
+
+# Enter container
 distrobox enter rhizome-dev # May hang or fail a few times. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go through then will be fine.
 
-distrobox stop rhizome-dev # To try again.
+# Stop container if needed
+distrobox stop rhizome-dev
 
 ```
 
