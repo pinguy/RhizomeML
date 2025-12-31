@@ -55,7 +55,7 @@ mkdir -p ~/.podman-tmp
 # Build the image (ensure Dockerfile.rhizome is in the current directory)
 TMPDIR=$HOME/.podman-tmp podman build -t rhizome-img -f Dockerfile.rhizome
 
-# If 'unexpected EOF' appears, rerun until it completes successfully, then rebuild the image
+# If 'unexpected EOF' appears, rerun until it completes successfully, then try building the image
 podman pull ubuntu:22.04
 
 # Create a Distrobox container with NVIDIA passthrough
