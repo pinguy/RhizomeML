@@ -14,55 +14,57 @@ sudo reboot
 
 **Note:** Tested and known to work on the `5.11.16_lowlatency` kernel for older distributions. Newer kernels are recommended where available.
 
-### Run it Using Distrobox
+### Running on Non-Ubuntu Systems with Distrobox
 
 ```bash
-# Clone Distrobox
+# Clone and install Distrobox
 git clone https://github.com/89luca89/distrobox.git
 cd distrobox
-
-# Install
 sudo ./install --prefix /usr/local
 distrobox version
 
-# Install Podman
+# Install Podman using your distro’s package manager
 sudo apt install podman
 
-# On HOST set-up nvidia-container
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+# NVIDIA Container Setup on the Host
 
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+# Add NVIDIA container repository and key (DEB-based systems only)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
 sudo apt update
+# Or use your distro’s package manager (e.g., Arch: sudo pacman -S nvidia-container-toolkit)
 sudo apt install nvidia-container-toolkit
 
-# Configure for podman
+# Generate CDI configuration for Podman
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 
-# If a previous install failed – FULL RESET
+# Reset Podman (if a previous setup failed)
 podman stop --all
 podman rm --all --force
 podman rmi --all --force
-rm -rf ~/.local/share/containers
-rm -rf ~/.config/containers
+rm -rf ~/.local/share/containers ~/.config/containers
 
-# Prepare stable temp dir for large builds
+# Prepare build directory for large image builds ---
 mkdir -p ~/.podman-tmp
 
-# Build the image. Download the Dockerfile.rhizome file from the repo.
+# Build the image (ensure Dockerfile.rhizome is in the current directory)
 TMPDIR=$HOME/.podman-tmp podman build -t rhizome-img -f Dockerfile.rhizome
 
-# Create container with nvidia passthrough
+# Create a Distrobox container with NVIDIA passthrough
 distrobox create --name rhizome-dev --image rhizome-img --nvidia
 
-# Enter container
-distrobox enter rhizome-dev # May hang or fail a few times. When it happens open a new Terminal while keeping the hanged one open and run it again. At some point it will go through then will be fine.
+# Enter the container
+distrobox enter rhizome-dev
+# Note: If it hangs on first entry, open another terminal and rerun the same command.
+# It may take a few retries to initialize correctly; afterwards it should be stable.
 
-# Stop container if needed
+# Stop the container when finished
 distrobox stop rhizome-dev
-
 ```
 
 ---
