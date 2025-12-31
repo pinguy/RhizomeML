@@ -37,6 +37,9 @@ os.environ["HF_HUB_ETAG_TIMEOUT"] = "600"
 
 import torch
 import json
+os.environ['MPLBACKEND'] = 'Agg'
+import matplotlib
+matplotlib.use('Agg', force=True)  # Non-GUI backend
 import matplotlib.pyplot as plt
 import matplotlib.style as style
 from pathlib import Path
