@@ -37,9 +37,6 @@ os.environ["HF_HUB_ETAG_TIMEOUT"] = "600"
 
 import torch
 import json
-os.environ['MPLBACKEND'] = 'Agg'
-import matplotlib
-matplotlib.use('Agg', force=True)  # Non-GUI backend
 import matplotlib.pyplot as plt
 import matplotlib.style as style
 from pathlib import Path
@@ -1942,7 +1939,7 @@ class RhizomeTrainer:
         default_args = {
             "output_dir": output_dir,
             "overwrite_output_dir": True,
-            "num_train_epochs": 3,
+            "num_train_epochs": 1.3,
             "per_device_train_batch_size": default_batch_size,
             "gradient_accumulation_steps": default_grad_accum,
             "learning_rate": 5e-5,
@@ -1950,7 +1947,7 @@ class RhizomeTrainer:
             "warmup_steps": 100,
             "logging_steps": 25,
             "save_steps": 150,
-            "save_total_limit": 5,
+            "save_total_limit": 10,
             "eval_strategy": "steps" if has_validation else "no", # Use old name, as per error
             "eval_steps": 150 if has_validation else None,
             "save_strategy": "steps",
@@ -2271,7 +2268,7 @@ def main():
             use_cache=True,                # Cache tokenized dataset
             
             # Training parameters (auto-adjusted for CPU/GPU)
-            num_train_epochs=3,
+            num_train_epochs=1.3,
             # Note: batch_size and gradient_accumulation will auto-adjust based on device
             # You can still override them:
             #per_device_train_batch_size=2,   # Micro-batch for CPU
