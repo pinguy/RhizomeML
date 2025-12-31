@@ -1942,7 +1942,7 @@ class RhizomeTrainer:
         default_args = {
             "output_dir": output_dir,
             "overwrite_output_dir": True,
-            "num_train_epochs": 1.3,
+            "num_train_epochs": 3,
             "per_device_train_batch_size": default_batch_size,
             "gradient_accumulation_steps": default_grad_accum,
             "learning_rate": 5e-5,
@@ -2271,7 +2271,7 @@ def main():
             use_cache=True,                # Cache tokenized dataset
             
             # Training parameters (auto-adjusted for CPU/GPU)
-            num_train_epochs=1.3,
+            num_train_epochs=3,
             # Note: batch_size and gradient_accumulation will auto-adjust based on device
             # You can still override them:
             #per_device_train_batch_size=2,   # Micro-batch for CPU
