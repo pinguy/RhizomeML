@@ -26,8 +26,6 @@ distrobox version
 # Install Podman using your distro’s package manager
 sudo apt install podman
 
-# NVIDIA Container Setup on the Host
-
 # Add NVIDIA container repository and key (DEB-based systems only)
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
   | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
