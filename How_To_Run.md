@@ -1,4 +1,4 @@
-# **RhizomeML – Setup & Workflow - Ubuntu 22.04**
+# **RhizomeML - Setup & Workflow - Ubuntu 22.04**
 
 ### NVIDIA Driver Setup
 ```bash
@@ -12,9 +12,11 @@ sudo apt install --fix-missing nvidia-driver-580
 sudo reboot
 ```
 
-**Note:** Tested and known to work on the `5.11.16_lowlatency` kernel for older distributions. Newer kernels are recommended where available.
+**Note:** verified to work with the `5.11.16_lowlatency` kernel for older distributions. Newer kernels are recommended where supported.
 
 ### Running on Non-Ubuntu Systems with Distrobox
+
+For non-Ubuntu hosts, Distrobox provides an isolated Ubuntu 22.04 container with full GPU passthrough.
 
 ```bash
 # Clone and install Distrobox
@@ -53,7 +55,7 @@ mkdir -p ~/.podman-tmp
 # Build the image (ensure Dockerfile.rhizome is in the current directory)
 TMPDIR=$HOME/.podman-tmp podman build -t rhizome-img -f Dockerfile.rhizome
 
-# If you encounter an 'unexpected EOF' error, rerun this command until it completes successfully, then rebuild the image
+# If 'unexpected EOF' appears, rerun until it completes successfully, then rebuild the image
 podman pull ubuntu:22.04
 
 # Create a Distrobox container with NVIDIA passthrough
@@ -83,7 +85,7 @@ pip3 install -r requirements.txt --upgrade
 
 ## **Data Preparation**
 
-Place your PDFs inside:
+Place your source PDFs in:
 
 ```
 ./PDFs/
@@ -97,8 +99,8 @@ python3 pdf_to_json.py
 
 ## **Embedding Stage**
 
-Ensure `conversations.json` or `conversations2.json`, exported from ChatGPT/Claude, is in the working directory.
-Only `conversations.json` is required — if it's missing, the conversation-embedding step is skipped and only the PDF-derived `pdf_texts.json` (if generated) will be used.
+Ensure `conversations.json` or `conversations2.json` (exported from ChatGPT/Claude) is in the working directory.
+If only `pdf_texts.json` exists, conversation embeddings will be skipped automatically but not advised.
 
 ```bash
 python3 batch_embedder.py
@@ -115,7 +117,7 @@ python3 data_formatter.py \
     --semantic-method hybrid \
     --batch-size 256 # Larger uses more compute but faster
 ```
-Add `--force-cpu` to use the CPU.
+Add `--force-cpu` to override GPU usage.
 
 ---
 
@@ -125,7 +127,7 @@ Add `--force-cpu` to use the CPU.
 python3 train_script.py
 ```
 
-If you encounter tokenization errors, clear the cached tokenized dataset.
+If you encounter tokenization errors, clear the cached tokenized dataset directory.
 This occurs when reusing cached data with a different base model than the one it was created for:
 
 ```bash
@@ -227,7 +229,7 @@ deactivate
 # CPU only
 ./llama.cpp/build/bin/llama-server -m gguf_models/*.gguf -c 8192 --threads 14 --port 8081
 
-# Offloding
+# Offloading
 ./llama.cpp/build/bin/llama-server \
   -m ./gguf_models/*.gguf \
   --n-gpu-layers 999 \
