@@ -12,6 +12,7 @@ This script:
 
 Usage:
     python convert_to_gguf.py                          # Auto-detect latest checkpoint
+    python convert_to_gguf.py --hf EleutherAI/gpt-neo-125m  # Download & convert HF model
     python convert_to_gguf.py --update                 # Update llama.cpp (Fixes "BPE pre-tokenizer" errors)
     python convert_to_gguf.py --checkpoint checkpoint-2100
     python convert_to_gguf.py --quant q4_k_m           # Specify quantization
@@ -19,7 +20,7 @@ Usage:
     python convert_to_gguf.py --cpu                    # Build without CUDA (CPU-only)
 
 Requirements:
-    pip install torch transformers peft accelerate sentencepiece
+    pip install torch transformers peft accelerate sentencepiece huggingface_hub
 """
 
 import os
@@ -482,6 +483,35 @@ def ensure_llama_cpp_built(llama_cpp_dir: Path, cuda_enabled: bool = True, force
     return True
 
 
+def download_hf_model(model_id: str, output_dir: Path) -> bool:
+    """Download model from Hugging Face Hub."""
+    logger.info("=" * 60)
+    logger.info(f"Downloading {model_id} from Hugging Face...")
+    logger.info("=" * 60)
+    
+    try:
+        # Import here to avoid requirement if not using --hf
+        from huggingface_hub import snapshot_download
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        snapshot_download(
+            repo_id=model_id,
+            local_dir=output_dir,
+            local_dir_use_symlinks=False,
+            token=os.environ.get("HF_TOKEN")
+        )
+        logger.info(f"✅ Model downloaded to: {output_dir}")
+        return True
+    except ImportError:
+        logger.error("❌ huggingface_hub not installed.")
+        logger.error("Please run: pip install huggingface_hub")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Download failed: {e}")
+        return False
+
+
 def convert_to_gguf(
     model_dir: Path,
     output_file: Path,
@@ -645,6 +675,7 @@ def main():
         epilog="""
 Examples:
   %(prog)s                                    # Convert latest checkpoint with Q4_K_M
+  %(prog)s --hf EleutherAI/gpt-neo-125m       # Download and convert HF model
   %(prog)s --update                           # Update llama.cpp to latest version
   %(prog)s --checkpoint checkpoint-2100       # Specific checkpoint
   %(prog)s --quant q5_k_m                     # Higher quality quantization
@@ -674,6 +705,12 @@ Quantization options (smallest to largest):
         "--checkpoint", "-c",
         default=None,
         help="Specific checkpoint to convert (default: latest)"
+    )
+
+    parser.add_argument(
+        "--hf",
+        default=None,
+        help="Hugging Face model ID to download and convert (e.g. EleutherAI/gpt-neo-125m)"
     )
 
     parser.add_argument(
@@ -773,48 +810,15 @@ Quantization options (smallest to largest):
     logger.info("RhizomeML to GGUF Converter")
     logger.info("=" * 60)
 
-    # Step 0: Find checkpoint
-    if args.checkpoint:
-        checkpoint_path = Path(args.finetuned_dir) / args.checkpoint
-        if not checkpoint_path.exists():
-            checkpoint_path = Path(args.checkpoint)  # Try as absolute path
-    else:
-        checkpoint_path = find_latest_checkpoint(args.finetuned_dir)
-
-    if not checkpoint_path or not checkpoint_path.exists():
-        logger.error("No valid checkpoint found!")
-        sys.exit(1)
-
-    logger.info(f"📁 Using checkpoint: {checkpoint_path}")
-
-    # Detect model type
-    model_type, is_lora, base_model = detect_model_type(checkpoint_path)
-
-    if args.base_model:
-        base_model = args.base_model
-        logger.info(f"Using override base model: {base_model}")
-
-    if is_lora and not base_model:
-        logger.error("LoRA adapter detected but no base model found!")
-        logger.error("Please specify with --base-model")
-        sys.exit(1)
-
     # Setup paths
     merged_dir = Path(args.merged_dir)
     gguf_dir = Path(args.gguf_dir)
     gguf_dir.mkdir(parents=True, exist_ok=True)
     llama_cpp = Path(args.llama_cpp)
-
-    # Generate output names
-    checkpoint_name = checkpoint_path.name
-    model_short = base_model.split('/')[-1] if base_model else model_type
-
-    f16_gguf = gguf_dir / f"rhizome-{model_short}-{checkpoint_name}-f16.gguf"
-
-    if args.output:
-        quantized_gguf = gguf_dir / args.output
-    else:
-        quantized_gguf = gguf_dir / f"rhizome-{model_short}-{checkpoint_name}-{args.quant}.gguf"
+    
+    # Init vars
+    use_hf = False
+    is_lora = False
 
     # Ensure llama.cpp is available and built (handling update if requested)
     if not args.skip_build:
@@ -828,15 +832,80 @@ Quantization options (smallest to largest):
             sys.exit(1)
         llama_cpp = Path(find_llama_cpp(args.llama_cpp))
 
-    # Step 1: Merge LoRA (if needed)
-    if is_lora and not args.skip_merge:
+    # Step 0: Determine Input Model (Checkpoint vs HF)
+    if args.hf:
+        use_hf = True
+        logger.info(f"📁 Using Hugging Face model: {args.hf}")
+        
+        # Define download path
+        hf_model_name = args.hf.split("/")[-1]
+        model_to_convert = Path(f"./hf_models/{hf_model_name}")
+        
+        # Download
+        if not download_hf_model(args.hf, model_to_convert):
+            sys.exit(1)
+            
+        # Naming for output
+        f16_gguf = gguf_dir / f"{hf_model_name}-f16.gguf"
+        
+        if args.output:
+            quantized_gguf = gguf_dir / args.output
+        else:
+            quantized_gguf = gguf_dir / f"{hf_model_name}-{args.quant}.gguf"
+
+    else:
+        # Existing RhizomeML logic: Find checkpoint
+        if args.checkpoint:
+            checkpoint_path = Path(args.finetuned_dir) / args.checkpoint
+            if not checkpoint_path.exists():
+                checkpoint_path = Path(args.checkpoint)  # Try as absolute path
+        else:
+            checkpoint_path = find_latest_checkpoint(args.finetuned_dir)
+
+        if not checkpoint_path or not checkpoint_path.exists():
+            logger.error("No valid checkpoint found!")
+            sys.exit(1)
+
+        logger.info(f"📁 Using checkpoint: {checkpoint_path}")
+
+        # Detect model type
+        model_type, is_lora, base_model = detect_model_type(checkpoint_path)
+
+        if args.base_model:
+            base_model = args.base_model
+            logger.info(f"Using override base model: {base_model}")
+
+        if is_lora and not base_model:
+            logger.error("LoRA adapter detected but no base model found!")
+            logger.error("Please specify with --base-model")
+            sys.exit(1)
+            
+        # Determine conversion source
+        if is_lora and not args.skip_merge:
+            model_to_convert = merged_dir
+        else:
+            model_to_convert = checkpoint_path
+        
+        # Naming for output
+        checkpoint_name = checkpoint_path.name
+        model_short = base_model.split('/')[-1] if base_model else model_type
+
+        f16_gguf = gguf_dir / f"rhizome-{model_short}-{checkpoint_name}-f16.gguf"
+
+        if args.output:
+            quantized_gguf = gguf_dir / args.output
+        else:
+            quantized_gguf = gguf_dir / f"rhizome-{model_short}-{checkpoint_name}-{args.quant}.gguf"
+
+
+    # Step 1: Merge LoRA (Only if NOT using HF and IS lora)
+    if not use_hf and is_lora and not args.skip_merge:
         if not merge_lora_adapters(checkpoint_path, base_model, merged_dir, args.device):
             logger.error("LoRA merge failed!")
             sys.exit(1)
-        model_to_convert = merged_dir
-    else:
-        model_to_convert = checkpoint_path
+    elif not use_hf:
         logger.info("Skipping LoRA merge (full model or --skip-merge)")
+    # If using HF, we skip merge entirely as we downloaded base model
 
     # Step 2: Convert to GGUF (F16 first)
     if not convert_to_gguf(model_to_convert, f16_gguf, llama_cpp, outtype="f16"):
@@ -873,7 +942,7 @@ Quantization options (smallest to largest):
             final_gguf = f16_gguf
 
     # Clean up merged directory
-    if is_lora and not args.keep_merged and merged_dir.exists():
+    if not use_hf and is_lora and not args.keep_merged and merged_dir.exists():
         logger.info(f"Cleaning up merged model directory: {merged_dir}")
         shutil.rmtree(merged_dir)
 
