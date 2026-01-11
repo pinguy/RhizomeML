@@ -611,7 +611,7 @@ def build_interface():
                 """)
 
         gr.Markdown("---")
-        gr.Markdown("💡 **Tip:** Your £180 RTX 3060 is perfect for running 7B models with Q4 quantization!")
+        gr.Markdown("💡 **Tip:** A RTX 3060 is perfect for running some 20b (openai/gpt-oss-20b) models with Q4 quantization!")
 
     return app
 
