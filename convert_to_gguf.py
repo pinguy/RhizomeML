@@ -12,7 +12,7 @@ This script:
 
 Usage:
     python convert_to_gguf.py                          # Auto-detect latest checkpoint
-    python convert_to_gguf.py --hf EleutherAI/gpt-neo-125m  # Download & convert HF model
+    python convert_to_gguf.py --hf EleutherAI/pythia-160m  # Download & convert HF model
     python convert_to_gguf.py --update                 # Update llama.cpp (Fixes "BPE pre-tokenizer" errors)
     python convert_to_gguf.py --checkpoint checkpoint-2100
     python convert_to_gguf.py --quant q4_k_m           # Specify quantization
@@ -498,7 +498,7 @@ def download_hf_model(model_id: str, output_dir: Path) -> bool:
         snapshot_download(
             repo_id=model_id,
             local_dir=output_dir,
-            local_dir_use_symlinks=False,
+            # local_dir_use_symlinks is deprecated, handled automatically now
             token=os.environ.get("HF_TOKEN")
         )
         logger.info(f"✅ Model downloaded to: {output_dir}")
@@ -553,6 +553,9 @@ def convert_to_gguf(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Conversion failed: {e}")
+        logger.error("Possible reasons:")
+        logger.error("1. The model architecture is not supported by llama.cpp (e.g., GPT-Neo is often unsupported, try GPT-NeoX/Pythia instead)")
+        logger.error("2. Missing dependencies (check requirements.txt in llama.cpp)")
         return False
 
 
@@ -675,7 +678,7 @@ def main():
         epilog="""
 Examples:
   %(prog)s                                    # Convert latest checkpoint with Q4_K_M
-  %(prog)s --hf EleutherAI/gpt-neo-125m       # Download and convert HF model
+  %(prog)s --hf EleutherAI/pythia-160m        # Download and convert HF model
   %(prog)s --update                           # Update llama.cpp to latest version
   %(prog)s --checkpoint checkpoint-2100       # Specific checkpoint
   %(prog)s --quant q5_k_m                     # Higher quality quantization
