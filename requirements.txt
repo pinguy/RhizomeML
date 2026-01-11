@@ -37,6 +37,6 @@ faiss-cpu # faiss-gpu if using a gpu
 
 # Optional interactive/monitoring tools
 wandb
-spacy
+spacy[cpu]
 gradio==5.49.1
 requests
