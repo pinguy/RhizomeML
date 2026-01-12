@@ -1,5 +1,5 @@
 import os
-# Replace "google/gemma-3-1b-it-qat-int4-unquantized" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
+# Replace "LiquidAI/LFM2.5-1.2B-Base" with any CAUSAL_LM model you want to finetune from HF. GTX 1660 Ti with 6GB of VRAM is able to finefune models 3b and under.
 # CRITICAL: Handle Memory Fragmentation before Torch loads
 # This helps with "reserved but unallocated" memory issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -197,6 +197,9 @@ def get_gpu_info() -> dict:
             gpu_info['compute_capability'] = f"{props.major}.{props.minor}"
             gpu_info['compute_capability_major'] = props.major
             gpu_info['compute_capability_minor'] = props.minor
+
+            # Detect RTX vs GTX
+            gpu_info['is_rtx'] = 'RTX' in gpu_info['name'].upper()
 
             # Check if GPU is supported by modern PyTorch (6.0+ compute capability)
             compute_capability_numeric = props.major + (props.minor / 10.0)
@@ -1330,7 +1333,7 @@ class LossMaskedDataCollator:
     """
     tokenizer: Any
     max_length: int = 512
-    mask_prompt: bool = True  # Mask loss on user input
+    mask_prompt: bool = False  # Mask loss on user input
     mask_after_eos: bool = True  # Mask loss after <|endoftext|>
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -1542,36 +1545,20 @@ def load_tokenized_cache(cache_path):
     return None
 
 def setup_special_tokens(tokenizer, model):
-    """
-    Configure special tokens for instruction-tuned models.
+    """Use existing special tokens instead of adding new ones"""
 
-    Ensures <|endoftext|> is properly recognized as EOS.
-    """
-    special_tokens = {
-        'pad_token': '<|pad|>',
-        'eos_token': '<|endoftext|>',
-        'bos_token': '<|startoftext|>',
-        'unk_token': '<|unk|>',
-    }
+    # Don't add new tokens - just ensure existing ones are set
+    if tokenizer.eos_token is None:
+        # Use an existing token as EOS
+        tokenizer.eos_token = tokenizer.eos_token or '<|endoftext|>'
 
-    # Add special tokens if not present
-    num_added = tokenizer.add_special_tokens({
-        k: v for k, v in special_tokens.items()
-        if getattr(tokenizer, k, None) is None
-    })
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    if num_added > 0:
-        logger.info(f"Added {num_added} special tokens to tokenizer")
-        # Resize model embeddings to match new tokenizer size
-        model.resize_token_embeddings(len(tokenizer))
-        logger.info(f"Resized model embeddings to {len(tokenizer)}")
-
-    # Verify EOS token is set
-    if tokenizer.eos_token_id is None:
-        raise ValueError("EOS token not properly configured!")
+    # NO resize needed since we're not adding tokens
+    # model.resize_token_embeddings(len(tokenizer))  # <-- Remove this line
 
     logger.info(f"✅ EOS token configured: '{tokenizer.eos_token}' (ID: {tokenizer.eos_token_id})")
-
     return tokenizer, model
 
 class RhizomeTrainer:
@@ -1579,7 +1566,7 @@ class RhizomeTrainer:
     A wrapper class for fine-tuning RhizomeML (or similar Causal LMs) using
     Hugging Face Transformers Trainer, with integrated LoRA/QLoRA and custom logging.
     """
-    def __init__(self, model_name="google/gemma-3-1b-it-qat-int4-unquantized"):
+    def __init__(self, model_name="LiquidAI/LFM2.5-1.2B-Base"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -1891,10 +1878,23 @@ class RhizomeTrainer:
             #deepspeed_config = None
         else:
             # GPU defaults
-            default_batch_size = 2
-            default_grad_accum = 8
-            default_fp16 = True
-            default_gradient_checkpointing = True
+            # Check for RTX vs GTX/Other using the flag set in get_gpu_info
+            is_rtx = DEVICE_DETAILS.get('is_rtx', False)
+            gpu_name = DEVICE_DETAILS.get('name', 'Unknown GPU')
+
+            if is_rtx:
+                logger.info(f"🎮 RTX GPU Detected ({gpu_name}): Enabling FP16 & Gradient Checkpointing")
+                default_batch_size = 8
+                default_grad_accum = 2
+                default_fp16 = True
+                default_gradient_checkpointing = True
+            else:
+                logger.info(f"🎮 GTX/Older GPU Detected ({gpu_name}): Using conservative memory settings (FP32)")
+                default_batch_size = 2
+                default_grad_accum = 8
+                default_fp16 = False
+                default_gradient_checkpointing = False
+
             #deepspeed_config = "deepspeed_config.json"
 
         default_args = {
@@ -2011,7 +2011,7 @@ class RhizomeTrainer:
             if USE_CPU_ONLY:
                 logger.info(f"⚡ CPU Optimizations Applied:")
                 logger.info(f"   • Threads: {DEVICE_DETAILS.get('cpu_threads_used', 'N/A')}")
-                logger.info(f"   • BF16: {DEVICE_DETAILS.get('uses_bf16', False)}")
+                logger.info(f"   • BF16 precision: {DEVICE_DETAILS.get('uses_bf16', False)}")
                 logger.info(f"   • QLoRA 4-bit: {USE_QLORA}")
                 logger.info(f"   • Micro-batching: batch={training_args.per_device_train_batch_size}, accum={training_args.gradient_accumulation_steps}")
                 logger.info(f"   • Sequence packing: {use_sequence_packing}")
@@ -2214,7 +2214,7 @@ class RhizomeTrainer:
 def main():
     """Main execution function of the training script."""
 
-    trainer = RhizomeTrainer(model_name="google/gemma-3-1b-it-qat-int4-unquantized")
+    trainer = RhizomeTrainer(model_name="LiquidAI/LFM2.5-1.2B-Base")
 
     try:
         # Call the main training function with desired parameters
