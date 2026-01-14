@@ -1968,12 +1968,6 @@ class RhizomeTrainer:
             if last_checkpoint_path:
                 training_logger.set_checkpoint_info(last_checkpoint_path)
             
-            # WARNING: If resuming with different quantization settings, clear checkpoints
-            if last_checkpoint_path and USE_QLORA:
-                logger.warning("⚠️ Found existing checkpoint, but QLoRA is enabled.")
-                logger.warning("⚠️ If the checkpoint was trained without QLoRA, this may cause issues.")
-                logger.warning("⚠️ If training hangs or errors occur, delete the checkpoint folder and restart.")
-            
             # Step 8: Start training
             self.print_section("Training Progress", "🚀")
             
