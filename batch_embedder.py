@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 class EmbeddingConfig:
     """Configuration for the embedding process"""
     model_name: str = 'all-MiniLM-L12-v2'
-    batch_size: int = 32
-    chunk_size: int = 512
-    max_chunk_overlap: int = 50
+    batch_size: int = 64
+    chunk_size: int = 800
+    max_chunk_overlap: int = 100
     min_text_length: int = 15  # Relaxed from 20/30
-    max_text_length: int = 2000 # This now acts more as a max chunk length, not total message length
+    max_text_length: int = 5000 # This now acts more as a max chunk length, not total message length
     index_type: str = 'flat'
     use_gpu: bool = False
     save_incremental: bool = True
@@ -178,23 +178,23 @@ class ImprovedBatchEmbedder:
         """Split text into chunks with metadata. Ensures chunks are not too long."""
         if not text:
             return []
-        
+
         chunks = []
         words = text.split()
-        
+
         # If the text is shorter than or equal to the desired chunk size, return it as a single chunk.
         if len(words) <= self.config.chunk_size and len(text) <= self.config.max_text_length:
             return [{
                 'text': text,
                 'metadata': {**metadata, 'chunk_id': 0, 'total_chunks': 1}
             }]
-        
+
         # Otherwise, proceed with chunking
         i = 0
         while i < len(words):
             chunk_words = words[i:i + self.config.chunk_size]
             chunk_text = ' '.join(chunk_words)
-            
+
             # Ensure the chunk itself doesn't exceed max_text_length (character count)
             # This is a secondary check, as chunk_size is based on words.
             if len(chunk_text) > self.config.max_text_length:
@@ -209,7 +209,7 @@ class ImprovedBatchEmbedder:
                 # Skip very short chunks that might result from aggressive chunking
                 i += max(1, self.config.chunk_size - self.config.max_chunk_overlap)
                 continue
-            
+
             chunks.append({
                 'text': chunk_text,
                 'metadata': {
@@ -218,13 +218,13 @@ class ImprovedBatchEmbedder:
                     'total_chunks': -1 # Will be updated after all chunks are known
                 }
             })
-            
+
             i += max(1, self.config.chunk_size - self.config.max_chunk_overlap)
-        
+
         # Update total_chunks metadata for all generated chunks
         for chunk in chunks:
             chunk['metadata']['total_chunks'] = len(chunks)
-        
+
         return chunks
     
     def _get_text_hash(self, text: str) -> str:
@@ -970,7 +970,7 @@ class ImprovedBatchEmbedder:
 
 def main():
     """Main execution function with CPU/GPU optimization and progress indication"""
-    
+
     # Auto-detect GPU availability
     gpu_available = torch.cuda.is_available()
     if gpu_available:
@@ -980,35 +980,36 @@ def main():
 
     config = EmbeddingConfig(
         batch_size=64,
-        chunk_size=400,
-        max_chunk_overlap=50,
-        min_text_length=15, # Adjusted
-        use_gpu=gpu_available,  # Auto-selected based on detection
+        chunk_size=800,
+        max_chunk_overlap=100,
+        max_text_length=5000,
+        min_text_length=15,
+        use_gpu=gpu_available,
         index_type='flat',
         deduplication=True,
-        min_sentence_length=5, # Adjusted
-        max_non_alpha_ratio=0.6, # Adjusted
+        min_sentence_length=5,
+        max_non_alpha_ratio=0.6,
         filter_common_patterns=True,
         num_cpu_threads=None,
         enable_parallel_processing=True,
         parallel_workers=None
     )
-    
+
     embedder = ImprovedBatchEmbedder(config)
-    
+
     # Diagnose both conversation files
     embedder.diagnose_json_files("conversations.json", "conversations2.json", "pdf_texts.json")
-    
+
     if embedder.load_checkpoint():
         logger.info("Resuming from checkpoint...")
-    
+
     embedder.load_and_embed_all(
         convo_path="conversations.json",
         convo_path2="conversations2.json", # Pass the new conversation file path
         pdf_json_path="pdf_texts.json",
         strict_mode=False # Keep this as False to avoid crashing on minor issues, but check logs
     )
-    
+
     if embedder.total_embedded > 0:
         logger.info("\n🔍 Testing search functionality:")
         query_texts = [
