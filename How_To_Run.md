@@ -267,7 +267,6 @@ On GTX-class or older GPUs, disabling some features can slightly reduce memory u
 default_batch_size = 2
 default_grad_accum = 8
 default_fp16 = False                  
-default_gradient_checkpointing = False
 ```
 ---
 
