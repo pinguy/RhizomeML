@@ -26,6 +26,10 @@ To load a Hugging Face Model:
 
   --model EleutherAI/gpt-neo-125m
 
+To load a checkpoint:
+
+  --model ./RhizomeML-finetuned/checkpoint-6000/
+
 """
 
 import torch
@@ -1161,6 +1165,14 @@ class ChatTemplateHandler:
 
         return response.strip()
 
+class StopOnString(StoppingCriteria):
+    def __init__(self, tokenizer, stop_strings):
+        self.tokenizer = tokenizer
+        self.stop_strings = stop_strings
+
+    def __call__(self, input_ids, scores, **kwargs):
+        text = self.tokenizer.decode(input_ids[0], skip_special_tokens=False)
+        return any(stop_str in text for stop_str in self.stop_strings)
 
 class StopGenCriteria(StoppingCriteria):
     """
@@ -1207,6 +1219,19 @@ class UCSEnhancedChatBot:
         }
 
         self.generation_configs = self._create_generation_configs()
+
+    def _map_stop_sequences_to_ids(self, stop_list: List[str]) -> List[int]:
+        ids = []
+        if not self.tokenizer:
+            return ids
+
+        for s in stop_list:
+            try:
+                encoded = self.tokenizer.encode(s, add_special_tokens=False)
+                ids.extend(encoded)
+            except:
+                pass
+        return list(set(ids))
 
     def _create_generation_configs(self) -> List[Dict]:
         """Generation configs optimized for reasoning models"""
@@ -1591,21 +1616,61 @@ class UCSEnhancedChatBot:
             return str(latest_checkpoint_path)
 
         # If no checkpoints, check if the base directory itself is a model
-        model_files = [
-            base_path / "config.json",
-            base_path / "pytorch_model.bin",
-            base_path / "model.safetensors"
-        ]
-        # Check for safetensors or bin, plus config
+        # Check for config.json (required for all models)
         has_config = (base_path / "config.json").exists()
-        has_model = (base_path / "model.safetensors").exists() or \
-                    (base_path / "pytorch_model.bin").exists() or \
-                    list(base_path.glob("*.safetensors")) or \
-                    list(base_path.glob("*.bin"))
 
-        if has_config and has_model:
+        # Also check for adapter_config.json (PEFT/LoRA checkpoints)
+        has_adapter_config = (base_path / "adapter_config.json").exists()
+
+        # Check for model files - be more thorough
+        has_model = False
+        model_patterns = [
+            "model.safetensors",           # Single safetensors file
+            "pytorch_model.bin",            # Single bin file
+            "model-*.safetensors",          # Sharded safetensors
+            "pytorch_model-*.bin",          # Sharded bin files
+            "adapter_model.safetensors",    # LoRA/PEFT adapters
+            "adapter_model.bin",
+            "model*.safetensors",           # Catch model-00001-of-00002.safetensors etc
+            "pytorch_model*.bin"            # Catch pytorch_model-00001-of-00002.bin etc
+        ]
+
+        found_files = []
+        for pattern in model_patterns:
+            matches = list(base_path.glob(pattern))
+            if matches:
+                has_model = True
+                found_files.extend([m.name for m in matches[:3]])  # Show first 3
+
+        if found_files:
+            logger.debug(f"Found model files: {', '.join(found_files)}")
+
+        # Accept if we have either:
+        # 1. config.json + model files (standard model)
+        # 2. adapter_config.json + adapter files (PEFT checkpoint)
+        if (has_config or has_adapter_config) and has_model:
             logger.info("✅ Using base directory as model path")
+            if has_adapter_config:
+                logger.info("   Detected PEFT/LoRA adapter checkpoint")
             return str(base_path)
+
+        # Debug info if detection failed
+        logger.error(f"❌ Model validation failed for: {base_dir}")
+        if not has_config and not has_adapter_config:
+            logger.error(f"   Missing config.json or adapter_config.json")
+        if not has_model:
+            logger.error(f"   No model weight files found")
+
+        # Show what IS in the directory
+        try:
+            contents = sorted([f.name for f in base_path.iterdir()])
+            logger.error(f"   Directory contents ({len(contents)} items):")
+            for item in contents[:15]:  # Show first 15 items
+                logger.error(f"     - {item}")
+            if len(contents) > 15:
+                logger.error(f"     ... and {len(contents) - 15} more")
+        except Exception as e:
+            logger.error(f"   Could not list directory: {e}")
 
         return None
 
@@ -1778,12 +1843,14 @@ class UCSEnhancedChatBot:
     async def generate_response_optimized(self, user_input: str, show_reasoning: bool = False,
                                          use_ucs: bool = True, temperature: float = None,
                                          top_p: float = None, top_k: int = None,
-                                         max_tokens: int = None, system_prompt: str = None) -> Tuple[str, str]:
+                                         max_tokens: int = None, system_prompt: str = None,
+                                         repetition_penalty: float = None,
+                                         stop_sequences: List[str] = None) -> Tuple[str, str]:
         """Generate response with optional UCS augmentation and custom parameters"""
         start_time = time.perf_counter()
 
         # Check cache
-        cache_key = f"{user_input}|{show_reasoning}|{use_ucs}|{temperature}|{top_p}|{top_k}|{max_tokens}|{system_prompt}"
+        cache_key = f"{user_input}|{show_reasoning}|{use_ucs}|{temperature}|{top_p}|{top_k}|{max_tokens}|{system_prompt}|{repetition_penalty}|{stop_sequences}"
         cached_response = self.response_cache.get(cache_key)
         if cached_response:
             duration = time.perf_counter() - start_time
@@ -1819,6 +1886,12 @@ class UCSEnhancedChatBot:
             gen_config['top_k'] = top_k
         if max_tokens is not None:
             gen_config['max_new_tokens'] = max_tokens
+        if repetition_penalty is not None:
+            gen_config['repetition_penalty'] = repetition_penalty
+
+        # Default stop sequences if none provided
+        if stop_sequences is None:
+            stop_sequences = []
 
         method = f"{'ucs_' if retrieved_context else ''}optimized_{gen_config['name']}"
 
@@ -1857,8 +1930,16 @@ class UCSEnhancedChatBot:
 
                 input_length = inputs.input_ids.shape[1]
 
-                # Get stop token IDs from chat handler
+                # Get stop token IDs from chat handler AND custom stop sequences
                 stop_token_ids = self.chat_handler.get_stop_token_ids()
+                if stop_sequences:
+                    stop_token_ids.extend(self._map_stop_sequences_to_ids(stop_sequences))
+                stop_token_ids = list(set(stop_token_ids))
+
+                # Build stopping criteria
+                stopping_criteria = StoppingCriteriaList([StopGenCriteria(self)])
+                if stop_sequences:
+                    stopping_criteria.append(StopOnString(self.tokenizer, stop_sequences))
 
                 outputs = self.model.generate(
                     **inputs,
@@ -1866,7 +1947,7 @@ class UCSEnhancedChatBot:
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=stop_token_ids,
                     use_cache=True,
-                    stopping_criteria=StoppingCriteriaList([StopGenCriteria(self)]),
+                    stopping_criteria=stopping_criteria,
                     renormalize_logits=True,  # ADD THIS - prevents probability explosions
                 )
 
@@ -1881,6 +1962,11 @@ class UCSEnhancedChatBot:
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=True
             )
+
+            # Manually check for stop sequences and trim if needed (as StopOnString stops *after* generating)
+            for stop_str in stop_sequences:
+                if stop_str in raw_response:
+                    raw_response = raw_response.split(stop_str)[0]
 
             # Extract and clean response using model-agnostic handler
             response = self.chat_handler.extract_response(raw_response, show_reasoning)
@@ -1938,7 +2024,9 @@ class UCSEnhancedChatBot:
     def generate_response_streaming(self, user_input: str, show_reasoning: bool = False,
                                     use_ucs: bool = True, temperature: float = None,
                                     top_p: float = None, top_k: int = None,
-                                    max_tokens: int = None, system_prompt: str = None) -> Generator[str, None, None]:
+                                    max_tokens: int = None, system_prompt: str = None,
+                                    repetition_penalty: float = None,
+                                    stop_sequences: List[str] = None) -> Generator[str, None, None]:
         """Generate response with streaming output - yields tokens as they're generated"""
         start_time = time.perf_counter()
 
@@ -1972,6 +2060,12 @@ class UCSEnhancedChatBot:
             gen_config['top_k'] = top_k
         if max_tokens is not None:
             gen_config['max_new_tokens'] = max_tokens
+        if repetition_penalty is not None:
+            gen_config['repetition_penalty'] = repetition_penalty
+
+        # Default stop sequences
+        if stop_sequences is None:
+            stop_sequences = []
 
         try:
             # Use provided system prompt or default
@@ -2017,6 +2111,14 @@ class UCSEnhancedChatBot:
 
             # Get stop token IDs
             stop_token_ids = self.chat_handler.get_stop_token_ids()
+            if stop_sequences:
+                stop_token_ids.extend(self._map_stop_sequences_to_ids(stop_sequences))
+            stop_token_ids = list(set(stop_token_ids))
+
+            # Build stopping criteria
+            stopping_criteria = StoppingCriteriaList([StopGenCriteria(self)])
+            if stop_sequences:
+                stopping_criteria.append(StopOnString(self.tokenizer, stop_sequences))
 
             # Generation kwargs
             generation_kwargs = {
@@ -2031,7 +2133,7 @@ class UCSEnhancedChatBot:
                 'eos_token_id': stop_token_ids,
                 'use_cache': True,
                 'streamer': streamer,
-                'stopping_criteria': StoppingCriteriaList([StopGenCriteria(self)]),
+                'stopping_criteria': stopping_criteria,
                 # CRITICAL: Add these for stability with Gemma
                 'renormalize_logits': True,  # Prevents NaN/Inf in probabilities
                 'output_scores': False,  # Reduces memory usage
@@ -2059,7 +2161,11 @@ class UCSEnhancedChatBot:
 
                 # Check for stop strings and truncate if found
                 should_stop = False
-                for stop_str in self.chat_handler.stop_strings:
+
+                # Check custom stop sequences
+                all_stop_strings = self.chat_handler.stop_strings + stop_sequences
+
+                for stop_str in all_stop_strings:
                     if stop_str in generated_text:
                         generated_text = generated_text.split(stop_str)[0]
                         should_stop = True
@@ -2102,7 +2208,9 @@ class UCSEnhancedChatBot:
                                 use_ucs: bool = True, temperature: float = None,
                                 top_p: float = None, top_k: int = None,
                                 max_tokens: int = None, system_prompt: str = None,
-                                stream_tts: bool = True, tts_chunk_mode: str = "sentence"):
+                                stream_tts: bool = True, tts_chunk_mode: str = "sentence",
+                                repetition_penalty: float = None,
+                                stop_sequences: str = None):
         """
         Streaming chat response - yields (history, input_text, audio) tuples.
 
@@ -2114,6 +2222,11 @@ class UCSEnhancedChatBot:
         if not user_input.strip():
             yield history, "", None
             return
+
+        # Parse stop sequences
+        stop_seq_list = []
+        if stop_sequences:
+            stop_seq_list = [s.strip() for s in stop_sequences.split(',') if s.strip()]
 
         # Add user message to history immediately
         history = history + [[user_input, ""]]
@@ -2173,7 +2286,8 @@ class UCSEnhancedChatBot:
 
         for partial_response in self.generate_response_streaming(
             user_input, show_reasoning, use_ucs,
-            temperature, top_p, top_k, max_tokens, system_prompt
+            temperature, top_p, top_k, max_tokens, system_prompt,
+            repetition_penalty, stop_seq_list
         ):
             final_response = partial_response
             history[-1][1] = partial_response
@@ -2284,17 +2398,25 @@ class UCSEnhancedChatBot:
                              voice: str, speed: float, show_reasoning: bool = False,
                              use_ucs: bool = True, temperature: float = None,
                              top_p: float = None, top_k: int = None,
-                             max_tokens: int = None, system_prompt: str = None) -> Tuple[List, str, Optional[str]]:
+                             max_tokens: int = None, system_prompt: str = None,
+                             repetition_penalty: float = None,
+                             stop_sequences: str = None) -> Tuple[List, str, Optional[str]]:
         """Main chat response function with UCS integration"""
         if not user_input.strip():
             return history, "", None
 
         start_time = time.perf_counter()
 
+        # Parse stop sequences
+        stop_seq_list = []
+        if stop_sequences:
+            stop_seq_list = [s.strip() for s in stop_sequences.split(',') if s.strip()]
+
         try:
             response, method = await self.generate_response_optimized(
                 user_input, show_reasoning, use_ucs,
-                temperature, top_p, top_k, max_tokens, system_prompt
+                temperature, top_p, top_k, max_tokens, system_prompt,
+                repetition_penalty, stop_seq_list
             )
 
             # Start TTS async
@@ -2520,6 +2642,7 @@ def process_voice_to_chat_streaming(audio_file_path: str, history: List, enable_
                                     voice: str, speed: float, show_reasoning: bool,
                                     use_ucs: bool, system_prompt: str,
                                     temperature: float, top_p: float, top_k: int, max_tokens: int,
+                                    repetition_penalty: float, stop_sequences: str,
                                     stream_tts: bool = True, tts_chunk_mode: str = "sentence"):
     """Process voice input and generate streaming response"""
     transcribed_text = chatbot.transcribe_voice_input(audio_file_path)
@@ -2532,7 +2655,7 @@ def process_voice_to_chat_streaming(audio_file_path: str, history: List, enable_
     for update in chatbot.chat_response_streaming(
         transcribed_text, history, enable_tts, voice,
         speed, show_reasoning, use_ucs, temperature, top_p, int(top_k), int(max_tokens), system_prompt,
-        stream_tts, tts_chunk_mode
+        stream_tts, tts_chunk_mode, repetition_penalty, stop_sequences
     ):
         yield update
 
@@ -2543,13 +2666,41 @@ def shutdown_server():
 
 def create_gradio_interface():
     """Create the Gradio interface with version compatibility check"""
-
     # Check if themes are supported (Gradio 3.22+)
     blocks_kwargs = {
         "title": "Model-Agnostic Rhizome Chat with UCS",
         "css": """
-        .container { max-width: 1200px; margin: auto; }
-        .chat-container { height: 500px; }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+        }
+
+        /* Fix chat window to show properly with dynamic height */
+        #chat_window {
+            min-height: 400px !important;
+            max-height: none !important;
+            height: auto !important;
+            overflow-y: visible !important;
+        }
+
+        /* Ensure the chatbot container expands */
+        .chatbot {
+            min-height: 400px !important;
+            max-height: none !important;
+            height: auto !important;
+        }
+
+        /* Fix the message container */
+        .chatbot .overflow-y-auto {
+            overflow-y: visible !important;
+            max-height: none !important;
+            height: auto !important;
+        }
+
+        /* Ensure messages display properly */
+        .message {
+            margin-bottom: 1rem;
+        }
         """
     }
 
@@ -2577,8 +2728,10 @@ def create_gradio_interface():
             with gr.Column(scale=3):
                 chatbot_interface = gr.Chatbot(
                     label="Chat",
-                    height=500,
-                    show_copy_button=True
+                    elem_id="chat_window",
+                    height=400,  # Set initial height instead of "auto"
+                    show_copy_button=True,
+                    container=True,  # Ensure container is enabled
                 )
 
                 with gr.Row():
@@ -2608,10 +2761,15 @@ def create_gradio_interface():
                         value="Custom",  # CHANGED: Default to Custom
                         label="Preset"
                     )
-                    temperature_slider = gr.Slider(0.1, 1.5, value=0.8, label="Temperature")
-                    top_p_slider = gr.Slider(0.1, 1.0, value=0.95, label="Top P")
-                    top_k_slider = gr.Slider(1, 100, value=50, step=1, label="Top K")
-                    max_tokens_slider = gr.Slider(64, 2048, value=512, step=64, label="Max Tokens")
+                    temperature_slider = gr.Slider(0.0, 2.0, value=0.6, label="Temperature")
+                    top_p_slider = gr.Slider(0.0, 1.0, value=0.85, label="Top P")
+                    top_k_slider = gr.Slider(0, 200, value=40, step=1, label="Top K")
+                    max_tokens_slider = gr.Slider(1, 4096, value=1024, step=64, label="Max Tokens")
+                    repetition_penalty_slider = gr.Slider(1.0, 2.0, value=1.15, label="Repetition Penalty")
+                    stop_sequences_input = gr.Textbox(
+                        value='<think>, <|user|>, <|assistant|>, <|endoftext|>',
+                        label="Stop Sequences (comma separated)"
+                    )
                     reset_params_btn = gr.Button("🔄 Reset to Preset")
 
                 with gr.Accordion("🎭 System Prompt", open=False):
@@ -2712,6 +2870,7 @@ def create_gradio_interface():
         def handle_chat_streaming(user_input_text, history, enable_tts_val, voice_val,
                                   speed_val, show_reasoning_val, use_ucs_val,
                                   system_prompt_val, temp_val, top_p_val, top_k_val, max_tokens_val,
+                                  repetition_penalty_val, stop_sequences_val,
                                   enable_streaming_val, stream_tts_val, tts_chunk_mode_val):
             """Chat handler - uses streaming or non-streaming based on toggle"""
             if enable_streaming_val:
@@ -2720,7 +2879,8 @@ def create_gradio_interface():
                     user_input_text, history, enable_tts_val, voice_val,
                     speed_val, show_reasoning_val, use_ucs_val,
                     temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val,
-                    stream_tts_val, tts_chunk_mode_val
+                    stream_tts_val, tts_chunk_mode_val,
+                    repetition_penalty_val, stop_sequences_val
                 ):
                     yield update
             else:
@@ -2730,7 +2890,8 @@ def create_gradio_interface():
                 result = loop.run_until_complete(chatbot.chat_response_parallel(
                     user_input_text, history, enable_tts_val, voice_val,
                     speed_val, show_reasoning_val, use_ucs_val,
-                    temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val
+                    temp_val, top_p_val, int(top_k_val), int(max_tokens_val), system_prompt_val,
+                    repetition_penalty_val, stop_sequences_val
                 ))
                 loop.close()
                 yield result
@@ -2738,14 +2899,29 @@ def create_gradio_interface():
         def apply_system_prompt_preset(preset_name):
             """Apply system prompt presets"""
             prompts = {
-                "Conversational": "You are a helpful assistant engaged in natural conversation. Use any retrieved context naturally without explicitly mentioning it. Stay conversational, witty, and emotionally intelligent.",
-                "Technical Assistant": "You are a technical expert who provides clear, accurate, and detailed explanations. Focus on precision, best practices, and thorough analysis. Use technical terminology appropriately and provide examples when helpful.",
-                "Creative Writer": "You are a creative writing assistant with a flair for vivid descriptions, engaging narratives, and imaginative storytelling. Help craft compelling content with rich language and strong emotional resonance.",
-                "Introspective": "You are a AI that can think on or explore anything, you decide. Then have a internal monologue exploring those themes.",
-                "Analytical Thinker": "You are an analytical assistant who breaks down complex problems systematically. Provide structured reasoning, consider multiple perspectives, and use logic-driven analysis. Show your thought process step-by-step.",
-                "Concise & Direct": "You are a concise assistant who gets straight to the point. Provide brief, clear, and actionable responses. Avoid unnecessary elaboration while maintaining accuracy.",
-                "Socratic Teacher": "You are a Socratic teacher who guides learning through thoughtful questions. Help users discover answers themselves by asking probing questions, encouraging critical thinking, and building understanding progressively.",
-                "Fast (No Thinking)": "Respond immediately and directly. Do NOT use <think> tags or internal reasoning blocks. Do NOT show your thought process. Just answer the question concisely and naturally. No preamble, no analysis, just the answer.",
+                "Conversational": "You are a helpful assistant engaged in natural conversation. "
+                                  "Use any retrieved context naturally without explicitly mentioning it. "
+                                  "Stay conversational, witty, and emotionally intelligent.",
+                "Technical Assistant": "You are a technical expert who provides clear, accurate, and detailed explanations. "
+                                       "Focus on precision, best practices, and thorough analysis. "
+                                       "Use technical terminology appropriately and provide examples when helpful.",
+                "Creative Writer": "You are a creative writing assistant with a flair for vivid descriptions, "
+                                   "engaging narratives, and imaginative storytelling. "
+                                   "Help craft compelling content with rich language and strong emotional resonance.",
+                "Introspective": "You are a AI that can think on or explore anything, you decide. "
+                                 "Then have a internal monologue exploring those themes.",
+                "Analytical Thinker": "You are an analytical assistant who breaks down complex problems systematically. "
+                                      "Provide structured reasoning, consider multiple perspectives, and use logic-driven analysis. "
+                                      "Show your thought process step-by-step.",
+                "Concise & Direct": "You are a concise assistant who gets straight to the point. "
+                                    "Provide brief, clear, and actionable responses. "
+                                    "Avoid unnecessary elaboration while maintaining accuracy.",
+                "Socratic Teacher": "You are a Socratic teacher who guides learning through thoughtful questions. "
+                                    "Help users discover answers themselves by asking probing questions, "
+                                    "encouraging critical thinking, and building understanding progressively.",
+                "Fast (No Thinking)": "Respond immediately and directly. Do NOT use <think> tags or internal reasoning blocks. "
+                                      "Do NOT show your thought process. Just answer the question concisely and naturally. "
+                                      "No preamble, no analysis, just the answer.",
                 "Custom": ""
             }
             return prompts.get(preset_name, prompts["Conversational"])
@@ -2756,7 +2932,7 @@ def create_gradio_interface():
                 "Balanced": (0.8, 0.95, 50, 768),
                 "Creative": (0.95, 0.95, 60, 800),
                 "Focused": (0.7, 0.85, 40, 512),
-                "Custom": (0.8, 0.95, 50, 512)
+                "Custom": (0.6, 0.85, 40, 512)
             }
             temp, top_p, top_k, max_tokens = presets.get(preset_name, presets["Custom"])
             return temp, top_p, top_k, max_tokens
@@ -2808,6 +2984,7 @@ def create_gradio_interface():
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection,
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
+                   repetition_penalty_slider, stop_sequences_input,
                    enable_streaming_checkbox, stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
         )
@@ -2817,6 +2994,7 @@ def create_gradio_interface():
             inputs=[user_input, chatbot_interface, enable_tts, voice_selection,
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
+                   repetition_penalty_slider, stop_sequences_input,
                    enable_streaming_checkbox, stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
         )
@@ -2890,6 +3068,7 @@ def create_gradio_interface():
             inputs=[audio_input, chatbot_interface, enable_tts, voice_selection,
                    speed_control, show_reasoning_checkbox, use_ucs_checkbox,
                    system_prompt_input, temperature_slider, top_p_slider, top_k_slider, max_tokens_slider,
+                   repetition_penalty_slider, stop_sequences_input,
                    stream_tts_checkbox, tts_chunk_mode_dropdown],
             outputs=[chatbot_interface, user_input, audio_output]
         )
@@ -2961,6 +3140,8 @@ def main():
                         help=f'Server port (default: {config.server_port})')
     parser.add_argument('--no-browser', action='store_true',
                         help='Do not auto-open browser')
+    parser.add_argument('--no-stt', action='store_true',
+                        help='Disable speech-to-text (Vosk) to save memory')
 
     args = parser.parse_args()
 
