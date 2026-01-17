@@ -2791,7 +2791,7 @@ def create_gradio_interface():
                     max_tokens_slider = gr.Slider(1, 4096, value=1024, step=64, label="Max Tokens")
                     repetition_penalty_slider = gr.Slider(1.0, 2.0, value=1.15, label="Repetition Penalty")
                     stop_sequences_input = gr.Textbox(
-                        value='<think>, <|user|>, <|assistant|>, <|endoftext|>',
+                        value='<|user|>, <|assistant|>, <|endoftext|>, <think>, �,',
                         label="Stop Sequences (comma separated)"
                     )
                     reset_params_btn = gr.Button("🔄 Reset to Preset")
