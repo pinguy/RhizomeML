@@ -24,17 +24,41 @@ Command line options for TTS streaming:
 
 To load a Hugging Face Model:
 
-  --model EleutherAI/gpt-neo-125m
+  --model EleutherAI/pythia-160m
 
 To load a checkpoint:
 
   --model ./RhizomeML-finetuned/checkpoint-6000/
 
 """
+import os
 
+# This helps with "reserved but unallocated" memory issues
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# Suppress PyTorch cpp_extension CUDA warning when running on CPU
+import logging
+logging.getLogger("torch.utils.cpp_extension").setLevel(logging.ERROR)
+
+try:
+    config
+except NameError:
+    # Replace 'YOUR_HF_TOKEN_HERE' with your actual token. https://huggingface.co/settings/tokens
+    config = {
+        "HF_TOKEN": "YOUR_HF_TOKEN_HERE",
+    }
+
+os.environ["HF_TOKEN"] = config["HF_TOKEN"]
+
+# --- Hugging Face download stability (disable CAS/Xet) ---
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
+# Optional but recommended for slow/unstable links
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
+os.environ["HF_HUB_ETAG_TIMEOUT"] = "600"
 import torch
 import re
-import os
 import warnings
 import gradio as gr
 import numpy as np
