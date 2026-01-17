@@ -158,6 +158,7 @@ python3 gradio_chat_tts.py --tts-gpu    # Force CUDA
 python3 gradio_chat_tts.py --tts-auto   # Auto-detect best device
 python3 gradio_chat_tts.py --tts-mps    # Apple Silicon
 python3 gradio_chat_tts.py  --model Qwen/Qwen3-4B-Instruct-2507    # Load and use a model from Hugging Face
+python3 gradio_chat_tts.py  --model ./RhizomeML-finetuned/checkpoint-6000/ # Load from a Checkpoint
 ```
 
 ### **STT Setup (Vosk)**
@@ -237,6 +238,11 @@ deactivate
   --ctx-size 10240 \
   --batch-size 248 \
   --port 8081
+```
+### Convert to GGUF GUI:
+
+```bash
+python3 gguf_gui.py
 ```
 
 ---
