@@ -281,5 +281,5 @@ Training stops when:
 To change this behavior, modify:
 
 ```python
-metrics['coverage'] >= 1.0
+metrics['coverage'] >= 0.80
 ```
