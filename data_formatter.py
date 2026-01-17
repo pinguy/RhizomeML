@@ -225,6 +225,9 @@ class Config:
     # --- Q&A Pair Generation ---
     context_window_size: int = 3
     max_pairs_per_source: int = 5000
+    max_answer_words: int = 800  # Adjust based on your model's context window
+    min_answer_words: int = 20   # Ensure substantial answers
+    max_question_chars: int = 400  # Allow longer context in questions
 
     # --- Q&A Pair Quality Filtering ---
     dedup_similarity_threshold: float = 0.95
@@ -1055,26 +1058,26 @@ class QABuilder:
         self.cfg = cfg
         self.model = model
 
-    def _smart_truncate(self, text: str, max_chars: int = 500) -> str:
-        """
-        Truncates text smartly to avoid cutting words in half.
-        Prioritizes ending at a sentence boundary.
-        """
-        if len(text) <= max_chars:
-            return text
+def _smart_truncate(self, text: str, max_chars: int = 800) -> str:  # Increased from 500 to 800
+    """
+    Truncates text smartly to avoid cutting words in half.
+    Prioritizes ending at a sentence boundary.
+    """
+    if len(text) <= max_chars:
+        return text
 
-        truncated = text[:max_chars]
-        # Try to cut at last sentence ending
-        last_sentence = max(truncated.rfind('. '), truncated.rfind('? '), truncated.rfind('! '))
-        if last_sentence != -1:
-            return truncated[:last_sentence + 1]
+    truncated = text[:max_chars]
+    # Try to cut at last sentence ending
+    last_sentence = max(truncated.rfind('. '), truncated.rfind('? '), truncated.rfind('! '))
+    if last_sentence != -1:
+        return truncated[:last_sentence + 1]
 
-        # Fallback: cut at last space
-        last_space = truncated.rfind(' ')
-        if last_space != -1:
-            return truncated[:last_space]
+    # Fallback: cut at last space
+    last_space = truncated.rfind(' ')
+    if last_space != -1:
+        return truncated[:last_space]
 
-        return truncated
+    return truncated
 
     def _diverse_prompts(self, chunk_text: str, metadata: Dict) -> List[str]:
         paras = re.split(r'\n\n+', chunk_text)
@@ -1498,85 +1501,136 @@ class OptimizedDataProcessor:
     # CREATE PDF Q&A PAIRS
     # ========================================================================
 
-    def create_pdf_qa_pairs(self, pdf_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Optimized PDF Q&A pair creation with QABuilder and QualityScorer"""
-        if not self.use_semantic_filtering:
-            logger.warning("Semantic filtering disabled, cannot create PDF Q&A pairs.")
-            return []
+def create_pdf_qa_pairs(self, pdf_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Optimized PDF Q&A pair creation with better answer length handling"""
+    if not self.use_semantic_filtering:
+        logger.warning("Semantic filtering disabled, cannot create PDF Q&A pairs.")
+        return []
 
-        qa_pairs = []
-        qa_builder = QABuilder(self.config, self.model)
-        logger.info(f"Generating Q&A pairs from {len(pdf_entries)} PDF chunks...")
+    qa_pairs = []
+    qa_builder = QABuilder(self.config, self.model)
+    logger.info(f"Generating Q&A pairs from {len(pdf_entries)} PDF chunks...")
 
-        by_source = defaultdict(list)
-        for entry in pdf_entries:
-            by_source[entry['metadata'].get('filename', 'unknown_pdf')].append(entry)
+    by_source = defaultdict(list)
+    for entry in pdf_entries:
+        by_source[entry['metadata'].get('filename', 'unknown_pdf')].append(entry)
 
-        for source, entries in tqdm(by_source.items(), desc="Processing PDF sources"):
-            max_entries = min(len(entries), self.config.max_pairs_per_source // 3)
-            selected_entries = random.sample(entries, max_entries) if len(entries) > max_entries else entries
+    for source, entries in tqdm(by_source.items(), desc="Processing PDF sources"):
+        max_entries = min(len(entries), self.config.max_pairs_per_source // 3)
+        selected_entries = random.sample(entries, max_entries) if len(entries) > max_entries else entries
 
-            batch_questions, batch_answers, batch_metadata = [], [], []
+        batch_questions, batch_answers, batch_metadata = [], [], []
 
-            for entry in selected_entries:
-                # Filter by chunk quality
-                chunk_quality = entry.get('quality_scores', {}).get('composite_quality', 0)
-                if chunk_quality < 0.4:
-                    continue
+        for entry in selected_entries:
+            # Filter by chunk quality
+            chunk_quality = entry.get('quality_scores', {}).get('composite_quality', 0)
+            if chunk_quality < 0.4:
+                continue
 
-                chunk_text, metadata = entry.get('cleaned_text'), entry.get('metadata', {})
-                if not chunk_text: continue
+            chunk_text, metadata = entry.get('cleaned_text'), entry.get('metadata', {})
+            if not chunk_text: continue
 
-                # Use QABuilder
-                questions = qa_builder._diverse_prompts(chunk_text, metadata)
+            # Use QABuilder
+            questions = qa_builder._diverse_prompts(chunk_text, metadata)
 
-                # PATCH 4: Truncate PDF Answers
-                for question in questions:
-                    batch_questions.append(question)
+            # IMPROVED: Better answer length handling
+            for question in questions:
+                batch_questions.append(question)
 
-                    # Truncate answer to reasonable length (~200 words = ~300 tokens)
-                    words = chunk_text.split()
-                    if len(words) > 200:
-                        truncated_answer = ' '.join(words[:200])
-                        # Try to end at sentence boundary
-                        last_period = truncated_answer.rfind('. ')
-                        last_question = truncated_answer.rfind('? ')
-                        last_exclaim = truncated_answer.rfind('! ')
-                        last_sentence = max(last_period, last_question, last_exclaim)
+                # Use smart truncation for complete sentences
+                answer = self._truncate_answer_intelligently(chunk_text)
 
-                        if last_sentence > len(truncated_answer) * 0.7:  # Don't cut too much
-                            truncated_answer = truncated_answer[:last_sentence + 1]
-                        else:
-                            truncated_answer += '...'
-                    else:
-                        truncated_answer = chunk_text
+                batch_answers.append(answer)
 
-                    batch_answers.append(truncated_answer)
+                # Normalize metadata types for schema consistency
+                normalized_meta = normalize_metadata_types(metadata)
+                normalized_meta.update({
+                    'source_file': str(source),
+                    'source': 'pdf'
+                })
+                batch_metadata.append(normalized_meta)
 
-                    # PATCH: Normalize metadata types for schema consistency
-                    normalized_meta = normalize_metadata_types(metadata)
-                    normalized_meta.update({
-                        'source_file': str(source),
-                        'source': 'pdf'
+        if batch_questions:
+            quality_metrics_batch = self._assess_pair_quality_batch(batch_questions, batch_answers)
+
+            for q, a, meta, quality in zip(batch_questions, batch_answers, batch_metadata, quality_metrics_batch):
+                # Additional validation: ensure answer has minimum length
+                if (quality["quality_score"] >= self.config.qa_quality_score_threshold and
+                    len(a.split()) >= 20):  # Minimum 20 words for answers
+                    qa_pairs.append({
+                        'text': f"User: {q}\nAssistant: {a}",
+                        'user': q,
+                        'assistant': a,
+                        'quality_metrics': quality,
+                        'source_metadata': meta
                     })
-                    batch_metadata.append(normalized_meta)
 
-            if batch_questions:
-                quality_metrics_batch = self._assess_pair_quality_batch(batch_questions, batch_answers)
+    logger.info(f"Created {len(qa_pairs)} PDF Q&A pairs")
+    return qa_pairs
 
-                for q, a, meta, quality in zip(batch_questions, batch_answers, batch_metadata, quality_metrics_batch):
-                    if quality["quality_score"] >= self.config.qa_quality_score_threshold:
-                        qa_pairs.append({
-                            # Removed special tokens <|user|>, <|assistant|>, <|endoftext|>
-                            'text': f"User: {q}\nAssistant: {a}",
-                            'user': q,
-                            'assistant': a,
-                            'quality_metrics': quality,
-                            'source_metadata': meta
-                        })
 
-        logger.info(f"Created {len(qa_pairs)} PDF Q&A pairs")
-        return qa_pairs
+def _truncate_answer_intelligently(self, text: str, max_words: int = 400) -> str:
+    """
+    Intelligently truncate answers to ensure complete sentences.
+
+    Args:
+        text: The full text to truncate
+        max_words: Maximum number of words (default: 400 words ≈ 600 tokens)
+
+    Returns:
+        Truncated text ending at a complete sentence
+    """
+    words = text.split()
+
+    # If already short enough, return as-is
+    if len(words) <= max_words:
+        return text
+
+    # Take the first max_words
+    truncated = ' '.join(words[:max_words])
+
+    # Find the last complete sentence within the truncated text
+    # Look for sentence endings: period, question mark, exclamation point
+    sentence_endings = []
+
+    # Find all sentence endings
+    for i, char in enumerate(truncated):
+        if char in '.!?':
+            # Make sure it's not part of an abbreviation or decimal
+            if i + 1 < len(truncated):
+                next_char = truncated[i + 1]
+                # Valid sentence ending if followed by space or end of string
+                if next_char in ' \n\t' or i + 1 == len(truncated):
+                    sentence_endings.append(i + 1)
+
+    # Use the last sentence ending if we have one in the latter 70% of text
+    # This prevents cutting too much content
+    if sentence_endings:
+        min_cutoff = int(len(truncated) * 0.7)
+        valid_endings = [pos for pos in sentence_endings if pos >= min_cutoff]
+
+        if valid_endings:
+            # Use the last valid ending
+            return truncated[:valid_endings[-1]].strip()
+        elif sentence_endings:
+            # If no endings in the latter 70%, use the very last one
+            return truncated[:sentence_endings[-1]].strip()
+
+    # Fallback: if no sentence endings found, try to cut at a clause
+    # Look for commas, semicolons in the latter portion
+    clause_markers = []
+    for i, char in enumerate(truncated):
+        if char in ',;':
+            clause_markers.append(i + 1)
+
+    if clause_markers:
+        min_cutoff = int(len(truncated) * 0.8)
+        valid_clauses = [pos for pos in clause_markers if pos >= min_cutoff]
+        if valid_clauses:
+            return truncated[:valid_clauses[-1]].strip()
+
+    # Last resort: add ellipsis to indicate continuation
+    return truncated.strip() + '...'
 
     # ========================================================================
     # LEARNING AND SAVING
