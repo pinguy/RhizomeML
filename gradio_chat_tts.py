@@ -3203,7 +3203,7 @@ def main():
                         help='Enable model quantization')
     parser.add_argument('--no-quantize', action='store_false', dest='use_quantization',
                         help='Explicitly disable model quantization')
-    parser.add_argument('--quant-bits', type=int, choices=[4, 8], default=4,
+    parser.add_argument('--quant-bits', type=int, choices=[4, 8], default=None,
                         help='Quantization bits (4 or 8, default: 4)')
     parser.add_argument('--quant-type', type=str, choices=['nf4', 'fp4'], default='nf4',
                         help='Quantization type for 4-bit (nf4 or fp4, default: nf4)')
@@ -3253,8 +3253,16 @@ def main():
     config.tts_line_buffer = args.tts_line_buffer
 
     # Apply Quantization Settings
-    config.use_quantization = args.use_quantization
-    config.quantization_bits = args.quant_bits
+    if args.quant_bits is not None:
+        # If user explicitly set bits, enable quantization automatically
+        config.use_quantization = True
+        config.quantization_bits = args.quant_bits
+    else:
+        # Fallback to default if not set
+        config.quantization_bits = 4
+        # Respect the boolean flag (False by default unless --quantize passed)
+        config.use_quantization = args.use_quantization
+
     config.bnb_4bit_quant_type = args.quant_type
 
     # Apply STT Settings
