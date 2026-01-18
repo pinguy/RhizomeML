@@ -161,6 +161,13 @@ python3 gradio_chat_tts.py  --model Qwen/Qwen3-4B-Instruct-2507    # Load and us
 python3 gradio_chat_tts.py  --model ./RhizomeML-finetuned/checkpoint-6000/ # Load from a Checkpoint
 ```
 
+## **Gradio Chat + No TTS + 4bit Quantization (Low RAM/VRAM)**
+
+```bash
+python3 gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model ./RhizomeML-finetuned/checkpoint-3000/
+```
+
+
 ### **STT Setup (Vosk)**
 
 Download a Vosk speech model (large shown here; smaller ones work too):
