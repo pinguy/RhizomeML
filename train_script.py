@@ -723,7 +723,7 @@ class ThemeAwareTrainer(Trainer):
                     if check_threshold:
                         self._last_coverage_check_step = current_step
                         
-                        if metrics['coverage'] >= 0.83:
+                        if metrics['coverage'] >= 0.82:
                             logger.info("\n" + "="*70)
                             logger.info("🎯 THEME COVERAGE REACHED 100%! STOPPING TRAINING...")
                             logger.info("="*70)
