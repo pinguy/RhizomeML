@@ -30,6 +30,15 @@ To load a checkpoint:
 
   --model ./RhizomeML-finetuned/checkpoint-6000/
 
+Quantization Controls:
+  --quantize                Enable quantization
+  --quant-bits 4            4-bit or 8-bit (default: 4)
+  --quant-type nf4          nf4 or fp4 (default: nf4)
+  --no-quantize             Explicitly disable quantization
+
+STT Controls:
+  --enable-stt              Enable Speech-to-Text (default if available)
+  --no-stt                  Disable Speech-to-Text to save memory
 """
 import os
 
@@ -168,6 +177,9 @@ class Config:
     ucs_save_path: str = "rhizome_memory.json"  # Use JSON format for compatibility
     ucs_auto_save_interval: int = 300  # Save every 5 minutes
     ucs_fast_retrieval: bool = False  # False = use full cognitive loop with experts, True = fast direct retrieval
+
+    # STT Configuration
+    use_stt: bool = True  # Master switch for STT
 
     # Quantization
     use_quantization: bool = False  # Enable/disable quantization
@@ -1413,7 +1425,7 @@ class UCSEnhancedChatBot:
                             bnb_4bit_quant_type=config.bnb_4bit_quant_type,
                             bnb_4bit_use_double_quant=config.bnb_4bit_use_double_quant,
                         )
-                        logger.info("   - Using 4-bit NF4 quantization")
+                        logger.info(f"   - Using 4-bit {config.bnb_4bit_quant_type.upper()} quantization")
                         logger.info("   - Expected memory: ~1-2GB for 1.5B model")
 
                     elif config.quantization_bits == 8:
@@ -1576,8 +1588,13 @@ class UCSEnhancedChatBot:
 
             # Load voice transcriber
             if VOSK_AVAILABLE:
-                logger.info("📄 Loading voice transcriber...")
-                self.voice_transcriber = EnhancedVoiceTranscriber()
+                if config.use_stt:
+                    logger.info("📄 Loading voice transcriber...")
+                    self.voice_transcriber = EnhancedVoiceTranscriber()
+                else:
+                    logger.info("🎤 STT disabled by configuration (saving memory)")
+            else:
+                 logger.warning("⚠️ Vosk not available for STT")
 
             self._pre_warm_model()
             logger.info("✅ All models loaded!")
@@ -2483,6 +2500,8 @@ class UCSEnhancedChatBot:
     def transcribe_voice_input(self, audio_file_path: str) -> str:
         """Transcribe audio"""
         if not self.voice_transcriber:
+            if not config.use_stt:
+                return "❌ STT is disabled (enable with --enable-stt)"
             return "❌ Voice transcription not available"
 
         if not audio_file_path:
@@ -2527,6 +2546,11 @@ class UCSEnhancedChatBot:
         if config.use_hybrid_offload:
              offload_info = f"\n- Hybrid Offload: Enabled\n- Pattern: {config.offload_pattern}"
 
+        # Quantization stats
+        quant_info = ""
+        if config.use_quantization:
+             quant_info = f"\n- Quantization: Enabled ({config.quantization_bits}-bit {config.bnb_4bit_quant_type})"
+
         # TTS streaming info
         tts_info = "No"
         if self.streaming_tts_processor:
@@ -2539,9 +2563,9 @@ class UCSEnhancedChatBot:
 - Total: {self.stats['total_responses']}
 - Avg time: {avg_time:.2f}s
 - Errors: {self.stats['error_count']}
-- Device: {DEVICE_INFO}{model_info}{offload_info}
+- Device: {DEVICE_INFO}{model_info}{offload_info}{quant_info}
 - TTS: {tts_info}
-- STT: {'Yes' if self.voice_transcriber else 'No'}
+- STT: {'Yes' if self.voice_transcriber else 'No (Disabled)'}
 
 💾 **Cache:**
 - Size: {cache_stats['size']}/{cache_stats['max_size']}
@@ -2791,7 +2815,7 @@ def create_gradio_interface():
                     max_tokens_slider = gr.Slider(1, 4096, value=1024, step=64, label="Max Tokens")
                     repetition_penalty_slider = gr.Slider(1.0, 2.0, value=1.15, label="Repetition Penalty")
                     stop_sequences_input = gr.Textbox(
-                        value='<|user|>, <|assistant|>, <|endoftext|>, <think>, �,',
+                        value='<|user|>, <|assistant|>, <|endoftext|>, <think>, �',
                         label="Stop Sequences (comma separated)"
                     )
                     reset_params_btn = gr.Button("🔄 Reset to Preset")
@@ -2849,6 +2873,12 @@ def create_gradio_interface():
                     use_ucs_checkbox = gr.Checkbox(label="Enable UCS Memory", value=config.use_ucs and HAS_NUMPY)
                     show_reasoning_checkbox = gr.Checkbox(label="Show Reasoning (if available)", value=False)
                     enable_streaming_checkbox = gr.Checkbox(label="Enable Streaming", value=True)
+
+                    gr.Markdown("### Quantization Settings (Reload Required)")
+                    with gr.Row():
+                        quantization_checkbox = gr.Checkbox(label="Enable Quantization", value=config.use_quantization)
+                        quant_bits_radio = gr.Radio(choices=["4", "8"], value=str(config.quantization_bits), label="Bits")
+                        quant_type_radio = gr.Radio(choices=["nf4", "fp4"], value=config.bnb_4bit_quant_type, label="4-bit Type")
 
                     gr.Markdown("### Hybrid Offloading")
                     use_hybrid_offload_checkbox = gr.Checkbox(
@@ -2983,7 +3013,12 @@ def create_gradio_interface():
             result = chatbot.clear_ucs_memory()
             return result, chatbot.get_comprehensive_stats()
 
-        def handle_reload_model(hybrid_enabled, pattern):
+        def handle_reload_model(quant_enabled, quant_bits, quant_type, hybrid_enabled, pattern):
+            """Reload model with updated settings (Quantization + Hybrid Offload)"""
+            config.use_quantization = quant_enabled
+            config.quantization_bits = int(quant_bits)
+            config.bnb_4bit_quant_type = quant_type
+
             config.use_hybrid_offload = hybrid_enabled
             config.offload_pattern = pattern
 
@@ -2995,9 +3030,13 @@ def create_gradio_interface():
 
             # Reload
             success = chatbot.load_models()
-            status = "✅ Model Reloaded with Hybrid Offload" if success else "❌ Reload Failed"
+            status = "✅ Model Reloaded" if success else "❌ Reload Failed"
+
+            if quant_enabled:
+                status += f"\nQuantization: {quant_bits}-bit ({quant_type})"
             if hybrid_enabled:
-                 status += f"\nPattern: {pattern}"
+                 status += f"\nHybrid Offload: {pattern}"
+
             return status
 
         # Wire up events - using streaming for real-time text output
@@ -3116,7 +3155,7 @@ def create_gradio_interface():
 
         reload_model_btn.click(
             fn=handle_reload_model,
-            inputs=[use_hybrid_offload_checkbox, offload_pattern_input],
+            inputs=[quantization_checkbox, quant_bits_radio, quant_type_radio, use_hybrid_offload_checkbox, offload_pattern_input],
             outputs=[memory_status]
         )
 
@@ -3159,13 +3198,29 @@ def main():
     parser.add_argument('--tts-line-buffer', type=int, default=3,
                         help='Number of lines to buffer before TTS in line mode (default: 3)')
 
+    # Quantization controls
+    parser.add_argument('--quantize', action='store_true', dest='use_quantization',
+                        help='Enable model quantization')
+    parser.add_argument('--no-quantize', action='store_false', dest='use_quantization',
+                        help='Explicitly disable model quantization')
+    parser.add_argument('--quant-bits', type=int, choices=[4, 8], default=4,
+                        help='Quantization bits (4 or 8, default: 4)')
+    parser.add_argument('--quant-type', type=str, choices=['nf4', 'fp4'], default='nf4',
+                        help='Quantization type for 4-bit (nf4 or fp4, default: nf4)')
+    parser.set_defaults(use_quantization=False)
+
     # Other useful args
     parser.add_argument('--port', type=int, default=config.server_port,
                         help=f'Server port (default: {config.server_port})')
     parser.add_argument('--no-browser', action='store_true',
                         help='Do not auto-open browser')
-    parser.add_argument('--no-stt', action='store_true',
+
+    # STT Controls
+    parser.add_argument('--no-stt', action='store_false', dest='use_stt',
                         help='Disable speech-to-text (Vosk) to save memory')
+    parser.add_argument('--enable-stt', action='store_true', dest='use_stt',
+                        help='Enable speech-to-text (default if available)')
+    parser.set_defaults(use_stt=True)
 
     args = parser.parse_args()
 
@@ -3196,6 +3251,14 @@ def main():
     config.tts_chunk_size = args.tts_chunk_size
     config.tts_chunk_mode = args.tts_chunk_mode
     config.tts_line_buffer = args.tts_line_buffer
+
+    # Apply Quantization Settings
+    config.use_quantization = args.use_quantization
+    config.quantization_bits = args.quant_bits
+    config.bnb_4bit_quant_type = args.quant_type
+
+    # Apply STT Settings
+    config.use_stt = args.use_stt
 
     # Apply other args
     config.server_port = args.port
@@ -3249,10 +3312,13 @@ def main():
             logger.info("🔊 Kokoro TTS enabled")
 
     if VOSK_AVAILABLE:
-        logger.info("🎤 Vosk STT enabled")
+        if config.use_stt:
+            logger.info("🎤 Vosk STT enabled")
+        else:
+            logger.info("🎤 Vosk STT disabled (by config)")
 
     if config.use_quantization and BNB_AVAILABLE and DEVICE.type == 'cuda':
-        logger.info(f"🔬 {config.quantization_bits}-bit quantization enabled")
+        logger.info(f"🔬 {config.quantization_bits}-bit {config.bnb_4bit_quant_type} quantization enabled")
     elif config.use_quantization:
         logger.warning("⚠️ Quantization requested but not available (requires CUDA + bitsandbytes)")
     else:
