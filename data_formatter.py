@@ -1,4 +1,77 @@
+# Run with this for CPU only: python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid
+# Enabling --extract-keyphrases runs very slow but improves semantic themes
 
+
+from __future__ import annotations
+
+import numpy as np
+import json
+import ftfy
+import re
+import random
+import hashlib
+import pickle
+import gzip
+import logging
+import argparse
+import time
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "true" if os.cpu_count() > 6 else "false"
+from pathlib import Path
+from functools import partial
+from typing import List, Dict, Tuple, Optional, Any, Set
+from dataclasses import dataclass, field
+from collections import defaultdict, Counter
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing as mp
+
+# --- NLTK Setup ---
+NLTK_AVAILABLE = False
+NLTK_STOPWORDS = set()
+try:
+    import nltk
+    from nltk.data import find
+    try:
+        find('tokenizers/punkt_tab')
+        find('corpora/stopwords')
+        from nltk.corpus import stopwords
+        NLTK_STOPWORDS = set(stopwords.words('english'))
+        print(f"✓ NLTK loaded with {len(NLTK_STOPWORDS)} stopwords")
+    except LookupError:
+        print("Downloading NLTK resources...")
+        nltk.download('punkt_tab', quiet=True)
+        nltk.download('stopwords', quiet=True)
+        from nltk.corpus import stopwords
+        NLTK_STOPWORDS = set(stopwords.words('english'))
+    NLTK_AVAILABLE = True
+except ImportError:
+    print("⚠️  NLTK not available. Install with: pip install nltk")
+
+# --- Core ML/Data Libs ---
+import torch
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
+from tqdm import tqdm
+
+# --- Optional Libs (IPF, KeyBERT) ---
+try:
+    from pyipf import ipf as pyipf_function
+
+    class IPF:
+        """Wrapper for pyipf with enhanced validation"""
+
+        def __init__(self, seed, aggregates, dimensions,
+                     convergence_rate=0.01, max_iteration=100):
+            self.seed = seed
+            self.aggregates = aggregates
+            self.dimensions = dimensions
+            self.convergence_rate = convergence_rate
+            self.max_iteration = max_iteration
+            self._validate_inputs()
+
+        def _validate_inputs(self):
+            if not isinstance(self.seed, np.ndarray):
                 raise ValueError("Seed must be a numpy array")
             if not np.all(np.isfinite(self.seed)):
                 raise ValueError("Seed contains non-finite values")
@@ -36,14 +109,14 @@
     IPF_AVAILABLE = True
 except Exception as e:
     IPF_AVAILABLE = False
-    print(f"âš ï¸  IPF not available: {e}. Install with 'pip install pyipf'")
+    print(f"⚠️  IPF not available: {e}. Install with 'pip install pyipf'")
 
 try:
     from keybert import KeyBERT
     KEYBERT_AVAILABLE = True
 except:
     KEYBERT_AVAILABLE = False
-    print("âš ï¸  KeyBERT not available. Install with 'pip install keybert'")
+    print("⚠️  KeyBERT not available. Install with 'pip install keybert'")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -182,17 +255,99 @@ class Config:
 # ============================================================================
 
 def clean_text(text: str) -> str:
-    """
-    PATCHED: Disable text cleaning to prevent destructive mutation.
-    Returns text exactly as is.
-    """
-    return text
+    """Robust text cleaning function (structure-safe)."""
+
+    # --- Encoding fixes ---
+    text = ftfy.fix_encoding(text)
+    text = ftfy.fix_text(text)
+
+    # --- Whitespace (space-only, not newline) ---
+    text = re.sub(r'[ \t]+', ' ', text)
+
+    # --- Structural recovery ---
+    text = re.sub(r'\s*---\s*', '\n\n---\n\n', text)
+
+    # Headings: require real content after hashes
+    text = re.sub(
+        r'(?<!\n)(#{1,6}\s+(?=\S))',
+        r'\n\1',
+        text
+    )
+
+    # Numbered lists: require content after number
+    text = re.sub(
+        r'(?<!\n)(\b\d{1,2}\.\s+(?=\S))',
+        r'\n\1',
+        text
+    )
+
+    # --- Remove empty / junk headings ---
+    text = re.sub(
+        r'^\s*#{1,6}\s*(?:\*+|_+)?\s*$',
+        '',
+        text,
+        flags=re.MULTILINE
+    )
+
+    # --- Emoji spam ---
+    text = re.sub(r'[\U0001F300-\U0001F9FF]{3,}', '', text)
+
+    # --- Normalize excessive newlines ---
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # --- Zero-width chars ---
+    text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
+
+    # --- Hyphen line breaks ---
+    text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
+
+    # --- Quote cleanup ---
+    text = re.sub(r'\\(["\'])', r'\1', text)
+    while '\\\"' in text or "\\\'" in text:
+        text = text.replace('\\\"', '"').replace("\\\'", "'")
+
+    # --- OCR apostrophe fixes ---
+    text = re.sub(
+        r"(?i)\b([a-z]+)9(?=(?:t|s|m|re|ve|ll|d)\b)",
+        r"\1'",
+        text
+    )
+    text = re.sub(
+        r"(?i)(?<=in)9(?=\b|[^a-z])",
+        "g",
+        text
+    )
+    text = re.sub(
+        r"(?i)\b([a-z]{2,})9(?=s\b)",
+        r"\1'",
+        text
+    )
+
+    # --- Punctuation collapse ---
+    text = re.sub(r'([!?.,]){2,}["\']', r'\1"', text)
+
+    # --- Final spacing ---
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'\b9em\b', 'em', text)
+
+    # --- Final OCR 9 cleanup ---
+    text = re.sub(r'(?<!\d)9(?!\d)', '', text)
+
+    return text.strip()
+
 
 def validate_text(text: str, cfg: Config) -> bool:
-    """
-    PATCHED: Disable text validation to prevent data loss.
-    Always returns True.
-    """
+    """Robust text validation function."""
+    if not text or not text.strip():
+        return False
+    if len(text) < cfg.min_text_length or len(text) > cfg.max_text_length:
+        return False
+    words = text.split()
+    if len(words) < cfg.min_words:
+        return False
+    alpha = sum(c.isalpha() for c in text)
+    if len(text) > 0 and (len(text) - alpha) / len(text) > cfg.punctuation_ratio_threshold:
+        return False
     return True
 
 def _clean_text_batch(batch: List[str]) -> List[str]:
@@ -240,7 +395,7 @@ class IPFSemanticEnhancer:
         self.memory = memory
         self.cfg = cfg
         if not IPF_AVAILABLE:
-            logger.warning("âš ï¸  pyipf not installed. IPF features disabled.")
+            logger.warning("⚠️  pyipf not installed. IPF features disabled.")
 
     def calibrate_cooccurrence(self, expected_marginals: dict = None):
         if not IPF_AVAILABLE or not self.cfg.ipf_calibrate_cooccurrence:
@@ -293,7 +448,7 @@ class IPFSemanticEnhancer:
                         calibrated_count = int(calibrated_matrix[i, j])
                         if calibrated_count > 0:
                             self.memory.co_occurrence[theme_a][theme_b] = calibrated_count
-            logger.info(f"    âœ“ Calibrated {n}x{n} matrix")
+            logger.info(f"    ✓ Calibrated {n}x{n} matrix")
         except Exception as e:
             logger.warning(f"IPF calibration failed: {e}")
 
@@ -337,7 +492,7 @@ class IPFSemanticEnhancer:
                     if child in self.memory.hierarchy[parent]:
                         weight = balanced_table[i, j] / (row_totals[i] + 1e-8)
                         self.memory.hierarchy[parent][child] = weight
-            logger.info(f"    âœ“ Balanced {len(parent_themes)} relationships")
+            logger.info(f"    ✓ Balanced {len(parent_themes)} relationships")
         except Exception as e:
             logger.warning(f"Hierarchical IPF balancing failed: {e}")
 
@@ -383,7 +538,7 @@ class IPFSemanticEnhancer:
             for j, theme in enumerate(themes):
                 smoothed_count = int(smoothed_matrix[:, j].sum())
                 self.memory.theme_counts[theme] = smoothed_count
-            logger.info(f"    âœ“ Smoothed {n} themes")
+            logger.info(f"    ✓ Smoothed {n} themes")
         except Exception as e:
             logger.warning(f"Distribution smoothing failed: {e}")
 
@@ -426,7 +581,7 @@ class IPFSemanticEnhancer:
 
         top_mi = sorted(mi_matrix.items(), key=lambda x: x[1], reverse=True)[:20]
         self.memory.high_mi_pairs = {pair: mi for pair, mi in top_mi}
-        logger.info(f"    âœ“ Computed MI for {len(mi_matrix)} pairs, stored top 20")
+        logger.info(f"    ✓ Computed MI for {len(mi_matrix)} pairs, stored top 20")
 
 # ============================================================================
 # SEMANTIC LABELER
@@ -466,19 +621,19 @@ class SemanticLabeler:
             if KEYBERT_AVAILABLE and self.embedding_model:
                 try:
                     self.kw_model = KeyBERT(model=self.embedding_model)
-                    logger.info("âœ“ KeyBERT initialized for phrase extraction")
+                    logger.info("✓ KeyBERT initialized for phrase extraction")
                 except Exception as e:
                     logger.warning(f"Failed to initialize KeyBERT: {e}")
             elif not KEYBERT_AVAILABLE:
-                logger.warning("âš ï¸  --extract-keyphrases enabled, but 'keybert' not installed.")
+                logger.warning("⚠️  --extract-keyphrases enabled, but 'keybert' not installed.")
 
         if self.mode == 'adaptive':
             self.memory = SemanticMemory()
             self._current_run_records = []
             self._load_memory()
-            logger.info(f"ðŸ§  SemanticLabeler: Adaptive mode (Gen {self.memory.generation}, Method: {self.method})")
+            logger.info(f"🧠 SemanticLabeler: Adaptive mode (Gen {self.memory.generation}, Method: {self.method})")
         else:
-            logger.info(f"ðŸ“‹ SemanticLabeler: Normal mode (Method: {self.method})")
+            logger.info(f"📋 SemanticLabeler: Normal mode (Method: {self.method})")
 
     def _load_memory(self):
         path = Path(self.cfg.semantic_memory_path)
@@ -489,8 +644,8 @@ class SemanticLabeler:
                 if self.memory.tfidf_fitted and self.memory.tfidf_vocabulary:
                     self.tfidf_words.vocabulary_ = self.memory.tfidf_vocabulary
                     self.tfidf_words.idf_ = self.memory.tfidf_idf_values
-                    logger.info(f"âœ“ Restored TF-IDF state with {len(self.memory.tfidf_vocabulary)} terms")
-                logger.info(f"âœ“ Loaded memory (Gen {self.memory.generation}, {len(self.memory.theme_counts)} themes)")
+                    logger.info(f"✓ Restored TF-IDF state with {len(self.memory.tfidf_vocabulary)} terms")
+                logger.info(f"✓ Loaded memory (Gen {self.memory.generation}, {len(self.memory.theme_counts)} themes)")
             except Exception as e:
                 logger.warning(f"Failed to load semantic memory: {e}")
         else:
@@ -509,7 +664,7 @@ class SemanticLabeler:
         path = Path(self.cfg.semantic_memory_path)
         with open(path, 'wb') as f:
             pickle.dump(self.memory, f)
-        logger.info(f"âœ“ Saved memory to {path} (Gen {self.memory.generation})")
+        logger.info(f"✓ Saved memory to {path} (Gen {self.memory.generation})")
 
     def label(self, text: str) -> Dict:
         if self.mode == 'adaptive':
@@ -629,7 +784,7 @@ class SemanticLabeler:
         if not hasattr(self.tfidf_words, 'vocabulary_') and len(self._tfidf_words_corpus) >= 5:
             try:
                 self.tfidf_words.fit(self._tfidf_words_corpus)
-                logger.info(f"âœ“ TF-IDF fitted with {len(self.tfidf_words.vocabulary_)} terms")
+                logger.info(f"✓ TF-IDF fitted with {len(self.tfidf_words.vocabulary_)} terms")
             except Exception as e:
                 logger.warning(f"TF-IDF fitting failed: {e}")
                 return set()
@@ -757,7 +912,7 @@ class SemanticLabeler:
         if self.mode != 'adaptive' or not self._current_run_records:
             return
 
-        logger.info(f"\nðŸ§  Learning from {len(self._current_run_records)} chunks (method: {self.method})...")
+        logger.info(f"\n🧠 Learning from {len(self._current_run_records)} chunks (method: {self.method})...")
 
         for record in self._current_run_records:
             for theme in record['themes']:
@@ -786,11 +941,11 @@ class SemanticLabeler:
             enhancer.smooth_theme_distributions()
             enhancer.compute_mutual_information()
             self.memory.ipf_generation += 1
-            logger.info(f"âœ“ IPF enhancement complete (IPF Gen {self.memory.ipf_generation})")
+            logger.info(f"✓ IPF enhancement complete (IPF Gen {self.memory.ipf_generation})")
 
         self.memory.total_chunks_processed += len(self._current_run_records)
         self.memory.total_themes_discovered = len(self.memory.theme_counts)
-        logger.info(f"âœ“ Learned {len(self.memory.theme_counts)} unique themes")
+        logger.info(f"✓ Learned {len(self.memory.theme_counts)} unique themes")
 
         self._current_run_records = []
 
@@ -877,14 +1032,14 @@ class SemanticLabeler:
         logger.info(f"  - Word themes: {len(self.memory.word_themes)}")
         logger.info(f"Total chunks processed: {self.memory.total_chunks_processed}")
 
-        logger.info("\nðŸ”¥ Top 20 Themes:")
+        logger.info("\n🔥 Top 20 Themes:")
         for theme, count in self.memory.theme_counts.most_common(20):
             weight = self.memory.coherence_weights.get(theme, 1.0)
             ttype = "phrase" if theme in self.memory.phrase_themes else "word"
             logger.info(f"  {theme:40s} | count: {count:4d} | weight: {weight:.2f} | type: {ttype}")
 
         if self.method in ['ipf', 'hybrid'] and self.memory.high_mi_pairs:
-            logger.info("\nðŸ§¬ Top Mutual Information Pairs:")
+            logger.info("\n🧬 Top Mutual Information Pairs:")
             for (a, b), mi in list(self.memory.high_mi_pairs.items())[:10]:
                 logger.info(f"  {a:30s} <-> {b:30s} | MI: {mi:.4f}")
         logger.info("=" * 70)
@@ -1061,7 +1216,7 @@ class OptimizedDataProcessor:
             device = 'cpu' if self.config.force_cpu or not torch.cuda.is_available() else 'cuda'
             self.model = SentenceTransformer(self.config.embedding_model, device=device)
             self.model.eval()
-            logger.info(f"âœ“ Model {self.config.embedding_model} loaded on {device}")
+            logger.info(f"✓ Model {self.config.embedding_model} loaded on {device}")
         except Exception as e:
             logger.error(f"Failed to load SentenceTransformer model: {e}")
             self.use_semantic_filtering = False
@@ -1129,7 +1284,7 @@ class OptimizedDataProcessor:
             with open(metadata_path, 'rb') as f:
                 embedded_metadata = pickle.load(f)
 
-            logger.info(f"âœ“ Loaded {len(embedded_texts)} raw memory texts")
+            logger.info(f"✓ Loaded {len(embedded_texts)} raw memory texts")
 
             # VALIDATE STRUCTURE
             entries = []
@@ -1169,11 +1324,11 @@ class OptimizedDataProcessor:
                 entries.append({'text': text, 'metadata': meta})
 
             if skipped_invalid > 0:
-                logger.warning(f"âš ï¸ Skipped {skipped_invalid} entries with invalid structure")
+                logger.warning(f"⚠️ Skipped {skipped_invalid} entries with invalid structure")
             if skipped_missing_fields > 0:
-                logger.warning(f"âš ï¸ Skipped {skipped_missing_fields} conversation entries missing required fields")
+                logger.warning(f"⚠️ Skipped {skipped_missing_fields} conversation entries missing required fields")
 
-            logger.info(f"âœ“ Validated {len(entries)} entries")
+            logger.info(f"✓ Validated {len(entries)} entries")
             return entries
 
         except Exception as e:
@@ -1559,7 +1714,7 @@ class OptimizedDataProcessor:
 
         # ===== ADD THIS BLOCK =====
         # Deduplicate by text field before saving (catches any duplicates that slipped through)
-        logger.info("\nðŸ” Checking for duplicate training examples...")
+        logger.info("\n🔍 Checking for duplicate training examples...")
         for split_name in splits:
             text_seen = set()
             deduped = []
@@ -1571,9 +1726,9 @@ class OptimizedDataProcessor:
 
             duplicates_removed = len(splits[split_name]) - len(deduped)
             if duplicates_removed > 0:
-                logger.warning(f"  âš ï¸ {split_name}: Removed {duplicates_removed} duplicate texts")
+                logger.warning(f"  ⚠️ {split_name}: Removed {duplicates_removed} duplicate texts")
             else:
-                logger.info(f"  âœ“ {split_name}: No duplicates found")
+                logger.info(f"  ✓ {split_name}: No duplicates found")
 
             splits[split_name] = deduped
         # ===== END NEW BLOCK =====
@@ -1710,11 +1865,11 @@ def main(cfg: Config):
     gpu_available = torch.cuda.is_available()
     if gpu_available:
         if cfg.force_cpu:
-             logger.info(f"ðŸš€ Compatible GPU detected: {torch.cuda.get_device_name(0)}, but --force-cpu is set. Using CPU.")
+             logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}, but --force-cpu is set. Using CPU.")
         else:
-             logger.info(f"ðŸš€ Compatible GPU detected: {torch.cuda.get_device_name(0)}. Enabling GPU acceleration.")
+             logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}. Enabling GPU acceleration.")
     else:
-        logger.info("âš ï¸ No compatible GPU detected. Falling back to CPU.")
+        logger.info("⚠️ No compatible GPU detected. Falling back to CPU.")
 
     logger.info("=" * 70)
     logger.info("MEMORY TEXTS DATA FORMATTER")
@@ -1739,13 +1894,13 @@ def main(cfg: Config):
     # LOAD MEMORY DATA
     # ========================================================================
 
-    logger.info("\nðŸ”¥ LOADING MEMORY DATA...")
+    logger.info("\n🔥 LOADING MEMORY DATA...")
 
     # Load memory texts and metadata
     memory_entries_raw = processor.load_memory_texts()
 
     total_raw = len(memory_entries_raw)
-    logger.info(f"\nâœ“ Total raw entries loaded: {total_raw}")
+    logger.info(f"\n✓ Total raw entries loaded: {total_raw}")
 
     if total_raw == 0:
         logger.error("No data to process! Exiting.")
@@ -1755,14 +1910,14 @@ def main(cfg: Config):
     # PROCESS MEMORY ENTRIES (Clean, deduplicate, score, label)
     # ========================================================================
 
-    logger.info("\nðŸ”§ PROCESSING MEMORY ENTRIES...")
+    logger.info("\n🔧 PROCESSING MEMORY ENTRIES...")
     cleaned_memory_entries = processor.deduplicate_and_clean_entries(memory_entries_raw)
 
     # Separate by source type
     convo_entries = [e for e in cleaned_memory_entries if e.get('metadata', {}).get('source') == 'conversation']
     pdf_entries = [e for e in cleaned_memory_entries if e.get('metadata', {}).get('source') == 'pdf']
 
-    logger.info(f"âœ“ Memory data distribution:")
+    logger.info(f"✓ Memory data distribution:")
     logger.info(f"  - Conversation entries: {len(convo_entries)}")
     logger.info(f"  - PDF entries: {len(pdf_entries)}")
 
@@ -1770,7 +1925,7 @@ def main(cfg: Config):
     # CREATE PAIRS FROM MEMORY ENTRIES
     # ========================================================================
 
-    logger.info("\nðŸ”„ CREATING PAIRS FROM MEMORY ENTRIES...")
+    logger.info("\n🔄 CREATING PAIRS FROM MEMORY ENTRIES...")
 
     # Create conversational pairs
     conversational_pairs = processor.create_conversational_pairs(convo_entries)
@@ -1782,11 +1937,11 @@ def main(cfg: Config):
     # MERGE ALL PAIRS
     # ========================================================================
 
-    logger.info("\nðŸ”€ MERGING ALL DATA SOURCES...")
+    logger.info("\n🔀 MERGING ALL DATA SOURCES...")
 
     all_final_pairs = conversational_pairs + pdf_qa_pairs
 
-    logger.info(f"âœ“ Total merged pairs: {len(all_final_pairs)}")
+    logger.info(f"✓ Total merged pairs: {len(all_final_pairs)}")
     logger.info(f"  - From conversations: {len(conversational_pairs)}")
     logger.info(f"  - From PDFs: {len(pdf_qa_pairs)}")
 
@@ -1840,7 +1995,7 @@ def main(cfg: Config):
 
     if all_themes:
         theme_counts = Counter(all_themes)
-        logger.info("\nðŸ“Š THEME DISTRIBUTION:")
+        logger.info("\n📊 THEME DISTRIBUTION:")
         logger.info(f"Unique themes: {len(theme_counts)}")
         logger.info("Top 20 themes:")
         for theme, count in theme_counts.most_common(20):
@@ -1848,12 +2003,12 @@ def main(cfg: Config):
         if len(theme_counts) > 20:
             logger.info(f"  ... and {len(theme_counts) - 20} more themes")
 
-    logger.info("\nðŸ“ˆ SOURCE DISTRIBUTION:")
+    logger.info("\n📈 SOURCE DISTRIBUTION:")
     for source, count in source_counts.items():
         percentage = (count / total_pairs) * 100
         logger.info(f"  {source}: {count} ({percentage:.1f}%)")
 
-    logger.info("\nâœ… All datasets saved successfully!")
+    logger.info("\n✅ All datasets saved successfully!")
     logger.info(f"   Training format files: {cfg.output_prefix}_{{train,validation,test}}.jsonl")
     logger.info(f"   Detailed files: {cfg.output_prefix}_{{train,validation,test}}_detailed.jsonl")
     logger.info(f"   Metadata: dataset_metadata.json")
