@@ -164,7 +164,14 @@ python3 gradio_chat_tts.py  --model ./RhizomeML-finetuned/checkpoint-6000/ # Loa
 ## **Gradio Chat + No STT + 4bit Quantization (Low RAM/VRAM)**
 
 ```bash
-python3 gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model ./RhizomeML-finetuned/checkpoint-3000/
+python3 gradio_chat_tts.py --quantize                Enable quantization
+python3 gradio_chat_tts.py --quant-bits 4            4-bit or 8-bit (default: 4)
+python3 gradio_chat_tts.py --quant-type nf4          nf4 or fp4 (default: nf4)
+python3 gradio_chat_tts.py --no-quantize             Explicitly disable quantization
+python3 gradio_chat_tts.py --enable-stt              Enable Speech-to-Text (default if available)
+python3 gradio_chat_tts.py --no-stt                  Disable Speech-to-Text to save memory
+python3 gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model ./RhizomeML-finetuned/checkpoint-3000/ # Load from a Checkpoint Low RAM/VRAM
+python3 gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model DavidAU/LFM2.5-1.2B-Instruct-Thinking-Claude-High-Reasoning # Load and use a model from Hugging Face Low RAM/VRAM
 ```
 
 
