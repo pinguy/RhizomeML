@@ -289,9 +289,9 @@ default_fp16 = False
 Training stops when:
 
 * The epoch limit is reached (default: 3), **or**
-* 83% of semantic themes have been observed. Anything around the 81% seems to work best.
+* 82% of semantic themes have been observed. Anything around the 81% seems to work best.
 To change this behavior, modify:
 
 ```python
-metrics['coverage'] >= 0.83
+metrics['coverage'] >= 0.82
 ```
