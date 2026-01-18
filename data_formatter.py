@@ -255,99 +255,17 @@ class Config:
 # ============================================================================
 
 def clean_text(text: str) -> str:
-    """Robust text cleaning function (structure-safe)."""
-
-    # --- Encoding fixes ---
-    text = ftfy.fix_encoding(text)
-    text = ftfy.fix_text(text)
-
-    # --- Whitespace (space-only, not newline) ---
-    text = re.sub(r'[ \t]+', ' ', text)
-
-    # --- Structural recovery ---
-    text = re.sub(r'\s*---\s*', '\n\n---\n\n', text)
-
-    # Headings: require real content after hashes
-    text = re.sub(
-        r'(?<!\n)(#{1,6}\s+(?=\S))',
-        r'\n\1',
-        text
-    )
-
-    # Numbered lists: require content after number
-    text = re.sub(
-        r'(?<!\n)(\b\d{1,2}\.\s+(?=\S))',
-        r'\n\1',
-        text
-    )
-
-    # --- Remove empty / junk headings ---
-    text = re.sub(
-        r'^\s*#{1,6}\s*(?:\*+|_+)?\s*$',
-        '',
-        text,
-        flags=re.MULTILINE
-    )
-
-    # --- Emoji spam ---
-    text = re.sub(r'[\U0001F300-\U0001F9FF]{3,}', '', text)
-
-    # --- Normalize excessive newlines ---
-    text = re.sub(r'\n{3,}', '\n\n', text)
-
-    # --- Zero-width chars ---
-    text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
-
-    # --- Hyphen line breaks ---
-    text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
-
-    # --- Quote cleanup ---
-    text = re.sub(r'\\(["\'])', r'\1', text)
-    while '\\\"' in text or "\\\'" in text:
-        text = text.replace('\\\"', '"').replace("\\\'", "'")
-
-    # --- OCR apostrophe fixes ---
-    text = re.sub(
-        r"(?i)\b([a-z]+)9(?=(?:t|s|m|re|ve|ll|d)\b)",
-        r"\1'",
-        text
-    )
-    text = re.sub(
-        r"(?i)(?<=in)9(?=\b|[^a-z])",
-        "g",
-        text
-    )
-    text = re.sub(
-        r"(?i)\b([a-z]{2,})9(?=s\b)",
-        r"\1'",
-        text
-    )
-
-    # --- Punctuation collapse ---
-    text = re.sub(r'([!?.,]){2,}["\']', r'\1"', text)
-
-    # --- Final spacing ---
-    text = re.sub(r'[ \t]{2,}', ' ', text)
-    text = re.sub(r'\b9em\b', 'em', text)
-
-    # --- Final OCR 9 cleanup ---
-    text = re.sub(r'(?<!\d)9(?!\d)', '', text)
-
-    return text.strip()
-
+    """
+    PATCHED: Disable text cleaning to prevent destructive mutation.
+    Returns text exactly as is.
+    """
+    return text
 
 def validate_text(text: str, cfg: Config) -> bool:
-    """Robust text validation function."""
-    if not text or not text.strip():
-        return False
-    if len(text) < cfg.min_text_length or len(text) > cfg.max_text_length:
-        return False
-    words = text.split()
-    if len(words) < cfg.min_words:
-        return False
-    alpha = sum(c.isalpha() for c in text)
-    if len(text) > 0 and (len(text) - alpha) / len(text) > cfg.punctuation_ratio_threshold:
-        return False
+    """
+    PATCHED: Disable text validation to prevent data loss.
+    Always returns True.
+    """
     return True
 
 def _clean_text_batch(batch: List[str]) -> List[str]:
