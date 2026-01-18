@@ -1,77 +1,4 @@
-# Run with this for CPU only: python3 data_formatter.py --force-cpu --enable-semantic-labeling --semantic-mode normal --semantic-method hybrid
-# Enabling --extract-keyphrases runs very slow but improves semantic themes
 
-
-from __future__ import annotations
-
-import numpy as np
-import json
-import ftfy
-import re
-import random
-import hashlib
-import pickle
-import gzip
-import logging
-import argparse
-import time
-import os
-os.environ["TOKENIZERS_PARALLELISM"] = "true" if os.cpu_count() > 6 else "false"
-from pathlib import Path
-from functools import partial
-from typing import List, Dict, Tuple, Optional, Any, Set
-from dataclasses import dataclass, field
-from collections import defaultdict, Counter
-from concurrent.futures import ProcessPoolExecutor
-import multiprocessing as mp
-
-# --- NLTK Setup ---
-NLTK_AVAILABLE = False
-NLTK_STOPWORDS = set()
-try:
-    import nltk
-    from nltk.data import find
-    try:
-        find('tokenizers/punkt_tab')
-        find('corpora/stopwords')
-        from nltk.corpus import stopwords
-        NLTK_STOPWORDS = set(stopwords.words('english'))
-        print(f"✓ NLTK loaded with {len(NLTK_STOPWORDS)} stopwords")
-    except LookupError:
-        print("Downloading NLTK resources...")
-        nltk.download('punkt_tab', quiet=True)
-        nltk.download('stopwords', quiet=True)
-        from nltk.corpus import stopwords
-        NLTK_STOPWORDS = set(stopwords.words('english'))
-    NLTK_AVAILABLE = True
-except ImportError:
-    print("⚠️  NLTK not available. Install with: pip install nltk")
-
-# --- Core ML/Data Libs ---
-import torch
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.feature_extraction.text import TfidfVectorizer
-from tqdm import tqdm
-
-# --- Optional Libs (IPF, KeyBERT) ---
-try:
-    from pyipf import ipf as pyipf_function
-
-    class IPF:
-        """Wrapper for pyipf with enhanced validation"""
-
-        def __init__(self, seed, aggregates, dimensions,
-                     convergence_rate=0.01, max_iteration=100):
-            self.seed = seed
-            self.aggregates = aggregates
-            self.dimensions = dimensions
-            self.convergence_rate = convergence_rate
-            self.max_iteration = max_iteration
-            self._validate_inputs()
-
-        def _validate_inputs(self):
-            if not isinstance(self.seed, np.ndarray):
                 raise ValueError("Seed must be a numpy array")
             if not np.all(np.isfinite(self.seed)):
                 raise ValueError("Seed contains non-finite values")
@@ -109,14 +36,14 @@ try:
     IPF_AVAILABLE = True
 except Exception as e:
     IPF_AVAILABLE = False
-    print(f"⚠️  IPF not available: {e}. Install with 'pip install pyipf'")
+    print(f"âš ï¸  IPF not available: {e}. Install with 'pip install pyipf'")
 
 try:
     from keybert import KeyBERT
     KEYBERT_AVAILABLE = True
 except:
     KEYBERT_AVAILABLE = False
-    print("⚠️  KeyBERT not available. Install with 'pip install keybert'")
+    print("âš ï¸  KeyBERT not available. Install with 'pip install keybert'")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -225,9 +152,6 @@ class Config:
     # --- Q&A Pair Generation ---
     context_window_size: int = 3
     max_pairs_per_source: int = 5000
-    max_answer_words: int = 800  # Adjust based on your model's context window
-    min_answer_words: int = 20   # Ensure substantial answers
-    max_question_chars: int = 400  # Allow longer context in questions
 
     # --- Q&A Pair Quality Filtering ---
     dedup_similarity_threshold: float = 0.95
@@ -316,7 +240,7 @@ class IPFSemanticEnhancer:
         self.memory = memory
         self.cfg = cfg
         if not IPF_AVAILABLE:
-            logger.warning("⚠️  pyipf not installed. IPF features disabled.")
+            logger.warning("âš ï¸  pyipf not installed. IPF features disabled.")
 
     def calibrate_cooccurrence(self, expected_marginals: dict = None):
         if not IPF_AVAILABLE or not self.cfg.ipf_calibrate_cooccurrence:
@@ -369,7 +293,7 @@ class IPFSemanticEnhancer:
                         calibrated_count = int(calibrated_matrix[i, j])
                         if calibrated_count > 0:
                             self.memory.co_occurrence[theme_a][theme_b] = calibrated_count
-            logger.info(f"    ✓ Calibrated {n}x{n} matrix")
+            logger.info(f"    âœ“ Calibrated {n}x{n} matrix")
         except Exception as e:
             logger.warning(f"IPF calibration failed: {e}")
 
@@ -413,7 +337,7 @@ class IPFSemanticEnhancer:
                     if child in self.memory.hierarchy[parent]:
                         weight = balanced_table[i, j] / (row_totals[i] + 1e-8)
                         self.memory.hierarchy[parent][child] = weight
-            logger.info(f"    ✓ Balanced {len(parent_themes)} relationships")
+            logger.info(f"    âœ“ Balanced {len(parent_themes)} relationships")
         except Exception as e:
             logger.warning(f"Hierarchical IPF balancing failed: {e}")
 
@@ -459,7 +383,7 @@ class IPFSemanticEnhancer:
             for j, theme in enumerate(themes):
                 smoothed_count = int(smoothed_matrix[:, j].sum())
                 self.memory.theme_counts[theme] = smoothed_count
-            logger.info(f"    ✓ Smoothed {n} themes")
+            logger.info(f"    âœ“ Smoothed {n} themes")
         except Exception as e:
             logger.warning(f"Distribution smoothing failed: {e}")
 
@@ -502,7 +426,7 @@ class IPFSemanticEnhancer:
 
         top_mi = sorted(mi_matrix.items(), key=lambda x: x[1], reverse=True)[:20]
         self.memory.high_mi_pairs = {pair: mi for pair, mi in top_mi}
-        logger.info(f"    ✓ Computed MI for {len(mi_matrix)} pairs, stored top 20")
+        logger.info(f"    âœ“ Computed MI for {len(mi_matrix)} pairs, stored top 20")
 
 # ============================================================================
 # SEMANTIC LABELER
@@ -542,19 +466,19 @@ class SemanticLabeler:
             if KEYBERT_AVAILABLE and self.embedding_model:
                 try:
                     self.kw_model = KeyBERT(model=self.embedding_model)
-                    logger.info("✓ KeyBERT initialized for phrase extraction")
+                    logger.info("âœ“ KeyBERT initialized for phrase extraction")
                 except Exception as e:
                     logger.warning(f"Failed to initialize KeyBERT: {e}")
             elif not KEYBERT_AVAILABLE:
-                logger.warning("⚠️  --extract-keyphrases enabled, but 'keybert' not installed.")
+                logger.warning("âš ï¸  --extract-keyphrases enabled, but 'keybert' not installed.")
 
         if self.mode == 'adaptive':
             self.memory = SemanticMemory()
             self._current_run_records = []
             self._load_memory()
-            logger.info(f"🧠 SemanticLabeler: Adaptive mode (Gen {self.memory.generation}, Method: {self.method})")
+            logger.info(f"ðŸ§  SemanticLabeler: Adaptive mode (Gen {self.memory.generation}, Method: {self.method})")
         else:
-            logger.info(f"📋 SemanticLabeler: Normal mode (Method: {self.method})")
+            logger.info(f"ðŸ“‹ SemanticLabeler: Normal mode (Method: {self.method})")
 
     def _load_memory(self):
         path = Path(self.cfg.semantic_memory_path)
@@ -565,8 +489,8 @@ class SemanticLabeler:
                 if self.memory.tfidf_fitted and self.memory.tfidf_vocabulary:
                     self.tfidf_words.vocabulary_ = self.memory.tfidf_vocabulary
                     self.tfidf_words.idf_ = self.memory.tfidf_idf_values
-                    logger.info(f"✓ Restored TF-IDF state with {len(self.memory.tfidf_vocabulary)} terms")
-                logger.info(f"✓ Loaded memory (Gen {self.memory.generation}, {len(self.memory.theme_counts)} themes)")
+                    logger.info(f"âœ“ Restored TF-IDF state with {len(self.memory.tfidf_vocabulary)} terms")
+                logger.info(f"âœ“ Loaded memory (Gen {self.memory.generation}, {len(self.memory.theme_counts)} themes)")
             except Exception as e:
                 logger.warning(f"Failed to load semantic memory: {e}")
         else:
@@ -585,7 +509,7 @@ class SemanticLabeler:
         path = Path(self.cfg.semantic_memory_path)
         with open(path, 'wb') as f:
             pickle.dump(self.memory, f)
-        logger.info(f"✓ Saved memory to {path} (Gen {self.memory.generation})")
+        logger.info(f"âœ“ Saved memory to {path} (Gen {self.memory.generation})")
 
     def label(self, text: str) -> Dict:
         if self.mode == 'adaptive':
@@ -705,7 +629,7 @@ class SemanticLabeler:
         if not hasattr(self.tfidf_words, 'vocabulary_') and len(self._tfidf_words_corpus) >= 5:
             try:
                 self.tfidf_words.fit(self._tfidf_words_corpus)
-                logger.info(f"✓ TF-IDF fitted with {len(self.tfidf_words.vocabulary_)} terms")
+                logger.info(f"âœ“ TF-IDF fitted with {len(self.tfidf_words.vocabulary_)} terms")
             except Exception as e:
                 logger.warning(f"TF-IDF fitting failed: {e}")
                 return set()
@@ -833,7 +757,7 @@ class SemanticLabeler:
         if self.mode != 'adaptive' or not self._current_run_records:
             return
 
-        logger.info(f"\n🧠 Learning from {len(self._current_run_records)} chunks (method: {self.method})...")
+        logger.info(f"\nðŸ§  Learning from {len(self._current_run_records)} chunks (method: {self.method})...")
 
         for record in self._current_run_records:
             for theme in record['themes']:
@@ -862,11 +786,11 @@ class SemanticLabeler:
             enhancer.smooth_theme_distributions()
             enhancer.compute_mutual_information()
             self.memory.ipf_generation += 1
-            logger.info(f"✓ IPF enhancement complete (IPF Gen {self.memory.ipf_generation})")
+            logger.info(f"âœ“ IPF enhancement complete (IPF Gen {self.memory.ipf_generation})")
 
         self.memory.total_chunks_processed += len(self._current_run_records)
         self.memory.total_themes_discovered = len(self.memory.theme_counts)
-        logger.info(f"✓ Learned {len(self.memory.theme_counts)} unique themes")
+        logger.info(f"âœ“ Learned {len(self.memory.theme_counts)} unique themes")
 
         self._current_run_records = []
 
@@ -953,14 +877,14 @@ class SemanticLabeler:
         logger.info(f"  - Word themes: {len(self.memory.word_themes)}")
         logger.info(f"Total chunks processed: {self.memory.total_chunks_processed}")
 
-        logger.info("\n🔥 Top 20 Themes:")
+        logger.info("\nðŸ”¥ Top 20 Themes:")
         for theme, count in self.memory.theme_counts.most_common(20):
             weight = self.memory.coherence_weights.get(theme, 1.0)
             ttype = "phrase" if theme in self.memory.phrase_themes else "word"
             logger.info(f"  {theme:40s} | count: {count:4d} | weight: {weight:.2f} | type: {ttype}")
 
         if self.method in ['ipf', 'hybrid'] and self.memory.high_mi_pairs:
-            logger.info("\n🧬 Top Mutual Information Pairs:")
+            logger.info("\nðŸ§¬ Top Mutual Information Pairs:")
             for (a, b), mi in list(self.memory.high_mi_pairs.items())[:10]:
                 logger.info(f"  {a:30s} <-> {b:30s} | MI: {mi:.4f}")
         logger.info("=" * 70)
@@ -1058,26 +982,26 @@ class QABuilder:
         self.cfg = cfg
         self.model = model
 
-def _smart_truncate(self, text: str, max_chars: int = 800) -> str:  # Increased from 500 to 800
-    """
-    Truncates text smartly to avoid cutting words in half.
-    Prioritizes ending at a sentence boundary.
-    """
-    if len(text) <= max_chars:
-        return text
+    def _smart_truncate(self, text: str, max_chars: int = 500) -> str:
+        """
+        Truncates text smartly to avoid cutting words in half.
+        Prioritizes ending at a sentence boundary.
+        """
+        if len(text) <= max_chars:
+            return text
 
-    truncated = text[:max_chars]
-    # Try to cut at last sentence ending
-    last_sentence = max(truncated.rfind('. '), truncated.rfind('? '), truncated.rfind('! '))
-    if last_sentence != -1:
-        return truncated[:last_sentence + 1]
+        truncated = text[:max_chars]
+        # Try to cut at last sentence ending
+        last_sentence = max(truncated.rfind('. '), truncated.rfind('? '), truncated.rfind('! '))
+        if last_sentence != -1:
+            return truncated[:last_sentence + 1]
 
-    # Fallback: cut at last space
-    last_space = truncated.rfind(' ')
-    if last_space != -1:
-        return truncated[:last_space]
+        # Fallback: cut at last space
+        last_space = truncated.rfind(' ')
+        if last_space != -1:
+            return truncated[:last_space]
 
-    return truncated
+        return truncated
 
     def _diverse_prompts(self, chunk_text: str, metadata: Dict) -> List[str]:
         paras = re.split(r'\n\n+', chunk_text)
@@ -1137,7 +1061,7 @@ class OptimizedDataProcessor:
             device = 'cpu' if self.config.force_cpu or not torch.cuda.is_available() else 'cuda'
             self.model = SentenceTransformer(self.config.embedding_model, device=device)
             self.model.eval()
-            logger.info(f"✓ Model {self.config.embedding_model} loaded on {device}")
+            logger.info(f"âœ“ Model {self.config.embedding_model} loaded on {device}")
         except Exception as e:
             logger.error(f"Failed to load SentenceTransformer model: {e}")
             self.use_semantic_filtering = False
@@ -1205,7 +1129,7 @@ class OptimizedDataProcessor:
             with open(metadata_path, 'rb') as f:
                 embedded_metadata = pickle.load(f)
 
-            logger.info(f"✓ Loaded {len(embedded_texts)} raw memory texts")
+            logger.info(f"âœ“ Loaded {len(embedded_texts)} raw memory texts")
 
             # VALIDATE STRUCTURE
             entries = []
@@ -1245,11 +1169,11 @@ class OptimizedDataProcessor:
                 entries.append({'text': text, 'metadata': meta})
 
             if skipped_invalid > 0:
-                logger.warning(f"⚠️ Skipped {skipped_invalid} entries with invalid structure")
+                logger.warning(f"âš ï¸ Skipped {skipped_invalid} entries with invalid structure")
             if skipped_missing_fields > 0:
-                logger.warning(f"⚠️ Skipped {skipped_missing_fields} conversation entries missing required fields")
+                logger.warning(f"âš ï¸ Skipped {skipped_missing_fields} conversation entries missing required fields")
 
-            logger.info(f"✓ Validated {len(entries)} entries")
+            logger.info(f"âœ“ Validated {len(entries)} entries")
             return entries
 
         except Exception as e:
@@ -1501,136 +1425,85 @@ class OptimizedDataProcessor:
     # CREATE PDF Q&A PAIRS
     # ========================================================================
 
-def create_pdf_qa_pairs(self, pdf_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Optimized PDF Q&A pair creation with better answer length handling"""
-    if not self.use_semantic_filtering:
-        logger.warning("Semantic filtering disabled, cannot create PDF Q&A pairs.")
-        return []
+    def create_pdf_qa_pairs(self, pdf_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Optimized PDF Q&A pair creation with QABuilder and QualityScorer"""
+        if not self.use_semantic_filtering:
+            logger.warning("Semantic filtering disabled, cannot create PDF Q&A pairs.")
+            return []
 
-    qa_pairs = []
-    qa_builder = QABuilder(self.config, self.model)
-    logger.info(f"Generating Q&A pairs from {len(pdf_entries)} PDF chunks...")
+        qa_pairs = []
+        qa_builder = QABuilder(self.config, self.model)
+        logger.info(f"Generating Q&A pairs from {len(pdf_entries)} PDF chunks...")
 
-    by_source = defaultdict(list)
-    for entry in pdf_entries:
-        by_source[entry['metadata'].get('filename', 'unknown_pdf')].append(entry)
+        by_source = defaultdict(list)
+        for entry in pdf_entries:
+            by_source[entry['metadata'].get('filename', 'unknown_pdf')].append(entry)
 
-    for source, entries in tqdm(by_source.items(), desc="Processing PDF sources"):
-        max_entries = min(len(entries), self.config.max_pairs_per_source // 3)
-        selected_entries = random.sample(entries, max_entries) if len(entries) > max_entries else entries
+        for source, entries in tqdm(by_source.items(), desc="Processing PDF sources"):
+            max_entries = min(len(entries), self.config.max_pairs_per_source // 3)
+            selected_entries = random.sample(entries, max_entries) if len(entries) > max_entries else entries
 
-        batch_questions, batch_answers, batch_metadata = [], [], []
+            batch_questions, batch_answers, batch_metadata = [], [], []
 
-        for entry in selected_entries:
-            # Filter by chunk quality
-            chunk_quality = entry.get('quality_scores', {}).get('composite_quality', 0)
-            if chunk_quality < 0.4:
-                continue
+            for entry in selected_entries:
+                # Filter by chunk quality
+                chunk_quality = entry.get('quality_scores', {}).get('composite_quality', 0)
+                if chunk_quality < 0.4:
+                    continue
 
-            chunk_text, metadata = entry.get('cleaned_text'), entry.get('metadata', {})
-            if not chunk_text: continue
+                chunk_text, metadata = entry.get('cleaned_text'), entry.get('metadata', {})
+                if not chunk_text: continue
 
-            # Use QABuilder
-            questions = qa_builder._diverse_prompts(chunk_text, metadata)
+                # Use QABuilder
+                questions = qa_builder._diverse_prompts(chunk_text, metadata)
 
-            # IMPROVED: Better answer length handling
-            for question in questions:
-                batch_questions.append(question)
+                # PATCH 4: Truncate PDF Answers
+                for question in questions:
+                    batch_questions.append(question)
 
-                # Use smart truncation for complete sentences
-                answer = self._truncate_answer_intelligently(chunk_text)
+                    # Truncate answer to reasonable length (~200 words = ~300 tokens)
+                    words = chunk_text.split()
+                    if len(words) > 200:
+                        truncated_answer = ' '.join(words[:200])
+                        # Try to end at sentence boundary
+                        last_period = truncated_answer.rfind('. ')
+                        last_question = truncated_answer.rfind('? ')
+                        last_exclaim = truncated_answer.rfind('! ')
+                        last_sentence = max(last_period, last_question, last_exclaim)
 
-                batch_answers.append(answer)
+                        if last_sentence > len(truncated_answer) * 0.7:  # Don't cut too much
+                            truncated_answer = truncated_answer[:last_sentence + 1]
+                        else:
+                            truncated_answer += '...'
+                    else:
+                        truncated_answer = chunk_text
 
-                # Normalize metadata types for schema consistency
-                normalized_meta = normalize_metadata_types(metadata)
-                normalized_meta.update({
-                    'source_file': str(source),
-                    'source': 'pdf'
-                })
-                batch_metadata.append(normalized_meta)
+                    batch_answers.append(truncated_answer)
 
-        if batch_questions:
-            quality_metrics_batch = self._assess_pair_quality_batch(batch_questions, batch_answers)
-
-            for q, a, meta, quality in zip(batch_questions, batch_answers, batch_metadata, quality_metrics_batch):
-                # Additional validation: ensure answer has minimum length
-                if (quality["quality_score"] >= self.config.qa_quality_score_threshold and
-                    len(a.split()) >= 20):  # Minimum 20 words for answers
-                    qa_pairs.append({
-                        'text': f"User: {q}\nAssistant: {a}",
-                        'user': q,
-                        'assistant': a,
-                        'quality_metrics': quality,
-                        'source_metadata': meta
+                    # PATCH: Normalize metadata types for schema consistency
+                    normalized_meta = normalize_metadata_types(metadata)
+                    normalized_meta.update({
+                        'source_file': str(source),
+                        'source': 'pdf'
                     })
+                    batch_metadata.append(normalized_meta)
 
-    logger.info(f"Created {len(qa_pairs)} PDF Q&A pairs")
-    return qa_pairs
+            if batch_questions:
+                quality_metrics_batch = self._assess_pair_quality_batch(batch_questions, batch_answers)
 
+                for q, a, meta, quality in zip(batch_questions, batch_answers, batch_metadata, quality_metrics_batch):
+                    if quality["quality_score"] >= self.config.qa_quality_score_threshold:
+                        qa_pairs.append({
+                            # Removed special tokens <|user|>, <|assistant|>, <|endoftext|>
+                            'text': f"User: {q}\nAssistant: {a}",
+                            'user': q,
+                            'assistant': a,
+                            'quality_metrics': quality,
+                            'source_metadata': meta
+                        })
 
-def _truncate_answer_intelligently(self, text: str, max_words: int = 400) -> str:
-    """
-    Intelligently truncate answers to ensure complete sentences.
-
-    Args:
-        text: The full text to truncate
-        max_words: Maximum number of words (default: 400 words ≈ 600 tokens)
-
-    Returns:
-        Truncated text ending at a complete sentence
-    """
-    words = text.split()
-
-    # If already short enough, return as-is
-    if len(words) <= max_words:
-        return text
-
-    # Take the first max_words
-    truncated = ' '.join(words[:max_words])
-
-    # Find the last complete sentence within the truncated text
-    # Look for sentence endings: period, question mark, exclamation point
-    sentence_endings = []
-
-    # Find all sentence endings
-    for i, char in enumerate(truncated):
-        if char in '.!?':
-            # Make sure it's not part of an abbreviation or decimal
-            if i + 1 < len(truncated):
-                next_char = truncated[i + 1]
-                # Valid sentence ending if followed by space or end of string
-                if next_char in ' \n\t' or i + 1 == len(truncated):
-                    sentence_endings.append(i + 1)
-
-    # Use the last sentence ending if we have one in the latter 70% of text
-    # This prevents cutting too much content
-    if sentence_endings:
-        min_cutoff = int(len(truncated) * 0.7)
-        valid_endings = [pos for pos in sentence_endings if pos >= min_cutoff]
-
-        if valid_endings:
-            # Use the last valid ending
-            return truncated[:valid_endings[-1]].strip()
-        elif sentence_endings:
-            # If no endings in the latter 70%, use the very last one
-            return truncated[:sentence_endings[-1]].strip()
-
-    # Fallback: if no sentence endings found, try to cut at a clause
-    # Look for commas, semicolons in the latter portion
-    clause_markers = []
-    for i, char in enumerate(truncated):
-        if char in ',;':
-            clause_markers.append(i + 1)
-
-    if clause_markers:
-        min_cutoff = int(len(truncated) * 0.8)
-        valid_clauses = [pos for pos in clause_markers if pos >= min_cutoff]
-        if valid_clauses:
-            return truncated[:valid_clauses[-1]].strip()
-
-    # Last resort: add ellipsis to indicate continuation
-    return truncated.strip() + '...'
+        logger.info(f"Created {len(qa_pairs)} PDF Q&A pairs")
+        return qa_pairs
 
     # ========================================================================
     # LEARNING AND SAVING
@@ -1686,7 +1559,7 @@ def _truncate_answer_intelligently(self, text: str, max_words: int = 400) -> str
 
         # ===== ADD THIS BLOCK =====
         # Deduplicate by text field before saving (catches any duplicates that slipped through)
-        logger.info("\n🔍 Checking for duplicate training examples...")
+        logger.info("\nðŸ” Checking for duplicate training examples...")
         for split_name in splits:
             text_seen = set()
             deduped = []
@@ -1698,9 +1571,9 @@ def _truncate_answer_intelligently(self, text: str, max_words: int = 400) -> str
 
             duplicates_removed = len(splits[split_name]) - len(deduped)
             if duplicates_removed > 0:
-                logger.warning(f"  ⚠️ {split_name}: Removed {duplicates_removed} duplicate texts")
+                logger.warning(f"  âš ï¸ {split_name}: Removed {duplicates_removed} duplicate texts")
             else:
-                logger.info(f"  ✓ {split_name}: No duplicates found")
+                logger.info(f"  âœ“ {split_name}: No duplicates found")
 
             splits[split_name] = deduped
         # ===== END NEW BLOCK =====
@@ -1837,11 +1710,11 @@ def main(cfg: Config):
     gpu_available = torch.cuda.is_available()
     if gpu_available:
         if cfg.force_cpu:
-             logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}, but --force-cpu is set. Using CPU.")
+             logger.info(f"ðŸš€ Compatible GPU detected: {torch.cuda.get_device_name(0)}, but --force-cpu is set. Using CPU.")
         else:
-             logger.info(f"🚀 Compatible GPU detected: {torch.cuda.get_device_name(0)}. Enabling GPU acceleration.")
+             logger.info(f"ðŸš€ Compatible GPU detected: {torch.cuda.get_device_name(0)}. Enabling GPU acceleration.")
     else:
-        logger.info("⚠️ No compatible GPU detected. Falling back to CPU.")
+        logger.info("âš ï¸ No compatible GPU detected. Falling back to CPU.")
 
     logger.info("=" * 70)
     logger.info("MEMORY TEXTS DATA FORMATTER")
@@ -1866,13 +1739,13 @@ def main(cfg: Config):
     # LOAD MEMORY DATA
     # ========================================================================
 
-    logger.info("\n🔥 LOADING MEMORY DATA...")
+    logger.info("\nðŸ”¥ LOADING MEMORY DATA...")
 
     # Load memory texts and metadata
     memory_entries_raw = processor.load_memory_texts()
 
     total_raw = len(memory_entries_raw)
-    logger.info(f"\n✓ Total raw entries loaded: {total_raw}")
+    logger.info(f"\nâœ“ Total raw entries loaded: {total_raw}")
 
     if total_raw == 0:
         logger.error("No data to process! Exiting.")
@@ -1882,14 +1755,14 @@ def main(cfg: Config):
     # PROCESS MEMORY ENTRIES (Clean, deduplicate, score, label)
     # ========================================================================
 
-    logger.info("\n🔧 PROCESSING MEMORY ENTRIES...")
+    logger.info("\nðŸ”§ PROCESSING MEMORY ENTRIES...")
     cleaned_memory_entries = processor.deduplicate_and_clean_entries(memory_entries_raw)
 
     # Separate by source type
     convo_entries = [e for e in cleaned_memory_entries if e.get('metadata', {}).get('source') == 'conversation']
     pdf_entries = [e for e in cleaned_memory_entries if e.get('metadata', {}).get('source') == 'pdf']
 
-    logger.info(f"✓ Memory data distribution:")
+    logger.info(f"âœ“ Memory data distribution:")
     logger.info(f"  - Conversation entries: {len(convo_entries)}")
     logger.info(f"  - PDF entries: {len(pdf_entries)}")
 
@@ -1897,7 +1770,7 @@ def main(cfg: Config):
     # CREATE PAIRS FROM MEMORY ENTRIES
     # ========================================================================
 
-    logger.info("\n🔄 CREATING PAIRS FROM MEMORY ENTRIES...")
+    logger.info("\nðŸ”„ CREATING PAIRS FROM MEMORY ENTRIES...")
 
     # Create conversational pairs
     conversational_pairs = processor.create_conversational_pairs(convo_entries)
@@ -1909,11 +1782,11 @@ def main(cfg: Config):
     # MERGE ALL PAIRS
     # ========================================================================
 
-    logger.info("\n🔀 MERGING ALL DATA SOURCES...")
+    logger.info("\nðŸ”€ MERGING ALL DATA SOURCES...")
 
     all_final_pairs = conversational_pairs + pdf_qa_pairs
 
-    logger.info(f"✓ Total merged pairs: {len(all_final_pairs)}")
+    logger.info(f"âœ“ Total merged pairs: {len(all_final_pairs)}")
     logger.info(f"  - From conversations: {len(conversational_pairs)}")
     logger.info(f"  - From PDFs: {len(pdf_qa_pairs)}")
 
@@ -1967,7 +1840,7 @@ def main(cfg: Config):
 
     if all_themes:
         theme_counts = Counter(all_themes)
-        logger.info("\n📊 THEME DISTRIBUTION:")
+        logger.info("\nðŸ“Š THEME DISTRIBUTION:")
         logger.info(f"Unique themes: {len(theme_counts)}")
         logger.info("Top 20 themes:")
         for theme, count in theme_counts.most_common(20):
@@ -1975,12 +1848,12 @@ def main(cfg: Config):
         if len(theme_counts) > 20:
             logger.info(f"  ... and {len(theme_counts) - 20} more themes")
 
-    logger.info("\n📈 SOURCE DISTRIBUTION:")
+    logger.info("\nðŸ“ˆ SOURCE DISTRIBUTION:")
     for source, count in source_counts.items():
         percentage = (count / total_pairs) * 100
         logger.info(f"  {source}: {count} ({percentage:.1f}%)")
 
-    logger.info("\n✅ All datasets saved successfully!")
+    logger.info("\nâœ… All datasets saved successfully!")
     logger.info(f"   Training format files: {cfg.output_prefix}_{{train,validation,test}}.jsonl")
     logger.info(f"   Detailed files: {cfg.output_prefix}_{{train,validation,test}}_detailed.jsonl")
     logger.info(f"   Metadata: dataset_metadata.json")
