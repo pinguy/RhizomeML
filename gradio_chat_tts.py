@@ -2725,17 +2725,29 @@ def create_gradio_interface():
 
         /* Fix chat window to show properly with dynamic height */
         #chat_window {
-            min-height: 400px !important;
-            max-height: none !important;
+            min-height: 400px;
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+
+        /* Target the internal wrapper elements to allow expansion */
+        #chat_window .gradio-container {
             height: auto !important;
-            overflow-y: visible !important;
+        }
+
+        #chat_window .bubble-wrap {
+            max-height: none !important;
+        }
+
+        #chat_window .message-wrap {
+            max-height: none !important;
         }
 
         /* Ensure the chatbot container expands */
         .chatbot {
-            min-height: 400px !important;
-            max-height: none !important;
+            min-height: 400px;
             height: auto !important;
+            flex-grow: 1;
         }
 
         /* Fix the message container */
@@ -2777,7 +2789,7 @@ def create_gradio_interface():
                 chatbot_interface = gr.Chatbot(
                     label="Chat",
                     elem_id="chat_window",
-                    height=400,  # Set initial height instead of "auto"
+                    # height=400,  <-- REMOVED fixed height to allow expansion
                     show_copy_button=True,
                     container=True,  # Ensure container is enabled
                 )
@@ -2815,7 +2827,7 @@ def create_gradio_interface():
                     max_tokens_slider = gr.Slider(1, 4096, value=1024, step=64, label="Max Tokens")
                     repetition_penalty_slider = gr.Slider(1.0, 2.0, value=1.15, label="Repetition Penalty")
                     stop_sequences_input = gr.Textbox(
-                        value='<|user|>, <|assistant|>, <|endoftext|>, <think>, �',
+                        value='<|user|>, <|assistant|>, <|endoftext|>, <think>, ',
                         label="Stop Sequences (comma separated)"
                     )
                     reset_params_btn = gr.Button("🔄 Reset to Preset")
