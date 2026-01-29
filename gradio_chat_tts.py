@@ -2723,41 +2723,7 @@ def create_gradio_interface():
             margin: auto;
         }
 
-        /* Fix chat window to show properly with dynamic height */
-        #chat_window {
-            min-height: 400px;
-            flex-grow: 1;
-            overflow-y: auto;
-        }
-
-        /* Target the internal wrapper elements to allow expansion */
-        #chat_window .gradio-container {
-            height: auto !important;
-        }
-
-        #chat_window .bubble-wrap {
-            max-height: none !important;
-        }
-
-        #chat_window .message-wrap {
-            max-height: none !important;
-        }
-
-        /* Ensure the chatbot container expands */
-        .chatbot {
-            min-height: 400px;
-            height: auto !important;
-            flex-grow: 1;
-        }
-
-        /* Fix the message container */
-        .chatbot .overflow-y-auto {
-            overflow-y: visible !important;
-            max-height: none !important;
-            height: auto !important;
-        }
-
-        /* Ensure messages display properly */
+        /* Ensure messages have enough spacing */
         .message {
             margin-bottom: 1rem;
         }
@@ -2789,7 +2755,7 @@ def create_gradio_interface():
                 chatbot_interface = gr.Chatbot(
                     label="Chat",
                     elem_id="chat_window",
-                    # height=400,  <-- REMOVED fixed height to allow expansion
+                    height=700,  # Set explicit larger height to fix scrolling issues
                     show_copy_button=True,
                     container=True,  # Ensure container is enabled
                 )
