@@ -258,7 +258,15 @@ deactivate
 ```bash
 python3 gguf_gui.py
 ```
+### koboldcpp
 
+Once you have the GGUFF Koboldcpp Is recomended
+
+```bash
+curl -fLo koboldcpp https://github.com/LostRuins/koboldcpp/releases/latest/download/koboldcpp-linux-x64
+chmod +x koboldcpp
+./koboldcpp
+```
 ---
 
 # **OOM Adjustments**
