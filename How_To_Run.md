@@ -258,9 +258,9 @@ deactivate
 ```bash
 python3 gguf_gui.py
 ```
-### koboldcpp
+### Koboldcpp
 
-Once you have the GGUFF Koboldcpp Is recomended
+Once you have the GGUFF Koboldcpp is recomended
 
 ```bash
 curl -fLo koboldcpp https://github.com/LostRuins/koboldcpp/releases/latest/download/koboldcpp-linux-x64
