@@ -1,9 +1,9 @@
 # Core libraries for training and inference
 torch
-transformers
+transformers==4.57.3
 datasets
 peft
-sentence-transformers
+sentence-transformers==5.2.0
 bitsandbytes
 accelerate
 llama-cpp-python
