@@ -92,7 +92,7 @@ Place your source PDFs in:
 ```
 
 ```bash
-python3 pdf_to_json.py
+python pdf_to_json.py
 ```
 
 ---
@@ -104,7 +104,7 @@ If only `pdf_texts.json` exists, conversation embeddings will be skipped automat
 You can also test the run **without PDFs first** to verify that the conversation embeddings pipeline works before adding larger PDF data.
 
 ```bash
-python3 batch_embedder.py
+python batch_embedder.py
 ```
 
 ---
@@ -112,7 +112,7 @@ python3 batch_embedder.py
 ## **Semantic Processing**
 
 ```bash
-python3 data_formatter.py \
+python data_formatter.py \
     --enable-semantic-labeling \
     --semantic-mode normal \
     --semantic-method hybrid \
@@ -125,7 +125,7 @@ Add `--force-cpu` to override GPU usage.
 ## **Training**
 
 ```bash
-python3 train_script.py
+python train_script.py
 ```
 
 If you encounter tokenization errors, clear the cached tokenized dataset directory.
@@ -153,25 +153,25 @@ Note:
 ## **Gradio Chat + TTS (RAM Heavy)**
 
 ```bash
-python3 gradio_chat_tts.py --tts-cpu    # Force CPU - Recommended
-python3 gradio_chat_tts.py --tts-gpu    # Force CUDA 
-python3 gradio_chat_tts.py --tts-auto   # Auto-detect best device
-python3 gradio_chat_tts.py --tts-mps    # Apple Silicon
-python3 gradio_chat_tts.py  --model Qwen/Qwen3-4B-Instruct-2507    # Load and use a model from Hugging Face
-python3 gradio_chat_tts.py  --model ./RhizomeML-finetuned/checkpoint-6000/ # Load from a Checkpoint
+python gradio_chat_tts.py --tts-cpu    # Force CPU - Recommended
+python gradio_chat_tts.py --tts-gpu    # Force CUDA 
+python gradio_chat_tts.py --tts-auto   # Auto-detect best device
+python gradio_chat_tts.py --tts-mps    # Apple Silicon
+python gradio_chat_tts.py  --model Qwen/Qwen3-4B-Instruct-2507    # Load and use a model from Hugging Face
+python gradio_chat_tts.py  --model ./RhizomeML-finetuned/checkpoint-6000/ # Load from a Checkpoint
 ```
 
 ## **Gradio Chat + No STT + 4bit Quantization (Low RAM/VRAM)**
 
 ```bash
-python3 gradio_chat_tts.py --quantize                Enable quantization
-python3 gradio_chat_tts.py --quant-bits 4            4-bit or 8-bit (default: 4)
-python3 gradio_chat_tts.py --quant-type nf4          nf4 or fp4 (default: nf4)
-python3 gradio_chat_tts.py --no-quantize             Explicitly disable quantization
-python3 gradio_chat_tts.py --enable-stt              Enable Speech-to-Text (default if available)
-python3 gradio_chat_tts.py --no-stt                  Disable Speech-to-Text to save memory
-python3 gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model ./RhizomeML-finetuned/checkpoint-3000/ # Load from a Checkpoint Low RAM/VRAM
-python3 gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model DavidAU/LFM2.5-1.2B-Instruct-Thinking-Claude-High-Reasoning # Load and use a model from Hugging Face Low RAM/VRAM
+python gradio_chat_tts.py --quantize                Enable quantization
+python gradio_chat_tts.py --quant-bits 4            4-bit or 8-bit (default: 4)
+python gradio_chat_tts.py --quant-type nf4          nf4 or fp4 (default: nf4)
+python gradio_chat_tts.py --no-quantize             Explicitly disable quantization
+python gradio_chat_tts.py --enable-stt              Enable Speech-to-Text (default if available)
+python gradio_chat_tts.py --no-stt                  Disable Speech-to-Text to save memory
+python gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model ./RhizomeML-finetuned/checkpoint-3000/ # Load from a Checkpoint Low RAM/VRAM
+python gradio_chat_tts.py --tts-cpu --no-stt --quant-bits 4 --model DavidAU/LFM2.5-1.2B-Instruct-Thinking-Claude-High-Reasoning # Load and use a model from Hugging Face Low RAM/VRAM
 ```
 
 
@@ -222,14 +222,14 @@ nvidia-smi       # Should show your GPU
 ### Convert to GGUF
 
 ```bash
-python3 -m venv venv_gguf
+python -m venv venv_gguf
 source venv_gguf/bin/activate
 pip3 install --use-deprecated=legacy-resolver peft
 
-python3 convert_to_gguf.py              # Auto quantization, 4-bit medium
-python3 convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
-python3 convert_to_gguf.py --gpu        # Build with CUDA (default)
-python3 convert_to_gguf.py --cpu        # Build without CUDA (CPU-only)
+python convert_to_gguf.py              # Auto quantization, 4-bit medium
+python convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
+python convert_to_gguf.py --gpu        # Build with CUDA (default)
+python convert_to_gguf.py --cpu        # Build without CUDA (CPU-only)
 
 deactivate
 
@@ -256,7 +256,7 @@ deactivate
 ### Convert to GGUF GUI:
 
 ```bash
-python3 gguf_gui.py
+python gguf_gui.py
 ```
 ### Koboldcpp
 
