@@ -78,7 +78,7 @@ distrobox stop rhizome-dev
 git clone https://github.com/pinguy/RhizomeML.git
 cd RhizomeML
 
-pip3 install -r requirements.txt --upgrade
+pip install -r requirements.txt --upgrade
 ```
 
 ---
@@ -224,7 +224,7 @@ nvidia-smi       # Should show your GPU
 ```bash
 python -m venv venv_gguf
 source venv_gguf/bin/activate
-pip3 install --use-deprecated=legacy-resolver peft
+pip install --use-deprecated=legacy-resolver peft
 
 python convert_to_gguf.py              # Auto quantization, 4-bit medium
 python convert_to_gguf.py --quant f16  # No quantization (can go as small as q2_k - 2-bit)
