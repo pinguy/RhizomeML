@@ -16,7 +16,7 @@ sudo reboot
 
 ### Running on Non-Ubuntu Systems with Distrobox
 
-For non-Ubuntu hosts, Distrobox provides an isolated Ubuntu 22.04 container with full GPU passthrough.
+On non-Ubuntu hosts, Distrobox can spin up an isolated Ubuntu 22.04 container with full GPU passthrough. Running Nativity directly on other distributions is fine as long as you’re using Python 3.12 — Ubuntu is simply the known-good baseline.
 
 ```bash
 # Clone and install Distrobox
