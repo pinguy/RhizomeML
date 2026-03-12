@@ -18,6 +18,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -274,7 +275,33 @@ def main():
 
     total_written = merge_splits(args.no_gzip)
 
-    # ── Step 5: summary ───────────────────────────────────────────────────────
+    # ── Step 5: move intermediates to backup ──────────────────────────────────
+    backup_dir = DATA_DIR / "intermediates"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = ".jsonl.gz" if not args.no_gzip else ".jsonl"
+    kept = {f"dataset_{s}{ext}" for s in SPLITS}
+
+    moved = 0
+    for f in sorted(DATA_DIR.iterdir()):
+        if f.is_dir():
+            continue
+        if f.name in kept:
+            continue
+        dest = backup_dir / f.name
+        shutil.move(str(f), str(dest))
+        moved += 1
+
+    if moved:
+        print(f"\n  Moved {moved} intermediate file(s) → {backup_dir.relative_to(ROOT)}/")
+    print(f"  Training-ready files in {DATA_DIR.relative_to(ROOT)}/:")
+    for s in SPLITS:
+        p = DATA_DIR / f"dataset_{s}{ext}"
+        if p.exists():
+            size_mb = p.stat().st_size / (1024 * 1024)
+            print(f"    {p.name}  ({size_mb:.1f} MB)")
+
+    # ── Step 6: summary ───────────────────────────────────────────────────────
     print_summary(total_written)
 
 
