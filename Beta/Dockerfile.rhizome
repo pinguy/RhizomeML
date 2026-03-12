@@ -1,0 +1,51 @@
+FROM ubuntu:22.04
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Fix DNS resolution early so apt/pip can reach mirrors
+RUN echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+
+# Install system packages
+RUN apt update && apt install --fix-missing -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    tini \
+    curl \
+    wget \
+    build-essential \
+    cmake \
+    bash \
+    sudo \
+    procps \
+    ffmpeg \
+    nano \
+    nvtop \
+    htop \
+    && apt clean && rm -rf /var/lib/apt/lists/*
+
+# Use tini as init
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Set working directory
+WORKDIR /app
+
+# Upgrade pip to avoid resolver bugs
+RUN pip3 install --upgrade pip
+
+# Install CUDA 12.4 toolkit
+RUN apt-get update && \
+    apt-get install --fix-missing -y wget && \
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i cuda-keyring_1.1-1_all.deb && \
+    apt-get update && \
+    apt-get install --fix-missing -y cuda-toolkit-12-4 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Optional: Add user (if you want to avoid running as root)
+# RUN useradd -ms /bin/bash rhizome && echo "rhizome ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# USER rhizome
+# WORKDIR /home/rhizome
+
+CMD ["bash"]

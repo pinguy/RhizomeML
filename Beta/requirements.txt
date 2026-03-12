@@ -1,0 +1,42 @@
+# Core libraries for training and inference
+torch
+transformers==4.57.3
+datasets
+peft
+sentence-transformers==5.2.0
+bitsandbytes
+accelerate
+llama-cpp-python
+
+# Utility libraries
+numpy
+scikit-learn
+matplotlib
+psutil
+tqdm
+pyyaml
+pyipf
+ftfy
+librosa 
+scipy
+soundfile
+kokoro
+flask
+flask_cors
+vosk
+nltk
+keybert
+py-cpuinfo
+
+# PDF processing
+pdfminer.six
+PyMuPDF
+
+# Memory and embeddings
+faiss-cpu # faiss-gpu if using a gpu
+
+# Optional interactive/monitoring tools
+wandb
+spacy[cpu]
+gradio==5.49.1
+requests
