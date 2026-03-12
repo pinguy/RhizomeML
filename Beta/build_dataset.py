@@ -193,6 +193,10 @@ def main():
             PYTHON, "data_formatter.py",
             "--output-dir",    str(DATA_DIR),
             "--output-prefix", "conv",
+            "--enable-semantic-labeling",
+            "--semantic-mode",   "normal",
+            "--semantic-method", "hybrid",
+            "--extract-keyphrases",
         ]
         if args.no_gzip:
             cmd.append("--no-gzip")
@@ -231,7 +235,9 @@ def main():
                     "--pdf-file",              pdf.name,
                     "--output-prefix",         prefix,
                     "--enable-semantic-labeling",
-                    "--semantic-mode",         "adaptive",
+                    "--semantic-mode",         "normal",
+                    "--semantic-method",       "hybrid",
+                    "--extract-keyphrases",
                     "--qa-max-pairs-per-source", "20000",
                 ]
                 if args.pdf_workers:
