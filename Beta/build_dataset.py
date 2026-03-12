@@ -165,9 +165,27 @@ def main():
     ap.add_argument("--pdf-workers", type=int, default=None, help="Worker threads for adaptive_semantic.py")
     ap.add_argument("--pdf",         metavar="NAME", default=None,
                     help="Process only this PDF filename (basename), e.g. 'mybook.pdf'")
+    ap.add_argument("--extract-keyphrases", action="store_true",
+                    help="Enable KeyBERT keyphrase extraction (slow but improves theme quality)")
     args = ap.parse_args()
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── Resolve keyphrase extraction ──────────────────────────────────────────
+    # If --extract-keyphrases was passed on the CLI, use it without asking.
+    # Otherwise, give the user an interactive choice before the slow steps run.
+    use_keyphrases = args.extract_keyphrases
+    if not use_keyphrases and not (args.skip_conv and args.skip_pdfs):
+        print(f"\n{'─'*60}")
+        print("  KeyBERT keyphrase extraction improves theme quality but")
+        print("  runs significantly slower (2-3 word phrase analysis).")
+        print(f"{'─'*60}")
+        choice = input("  Enable keyphrase extraction? [y/N] ").strip().lower()
+        use_keyphrases = choice in ("y", "yes")
+        if use_keyphrases:
+            print("  → Keyphrases enabled\n")
+        else:
+            print("  → Keyphrases skipped (TF-IDF themes only)\n")
 
     # ── Step 1: embed conversations ───────────────────────────────────────────
     # NOTE: adaptive_semantic.py overwrites memory_texts.npy / memory.index on
@@ -196,8 +214,9 @@ def main():
             "--enable-semantic-labeling",
             "--semantic-mode",   "normal",
             "--semantic-method", "hybrid",
-            "--extract-keyphrases",
         ]
+        if use_keyphrases:
+            cmd.append("--extract-keyphrases")
         if args.no_gzip:
             cmd.append("--no-gzip")
         run(cmd, "Step 2 · data_formatter.py")
@@ -237,9 +256,10 @@ def main():
                     "--enable-semantic-labeling",
                     "--semantic-mode",         "normal",
                     "--semantic-method",       "hybrid",
-                    "--extract-keyphrases",
                     "--qa-max-pairs-per-source", "20000",
                 ]
+                if use_keyphrases:
+                    cmd.append("--extract-keyphrases")
                 if args.pdf_workers:
                     cmd += ["--workers", str(args.pdf_workers)]
                 if args.no_gzip:
