@@ -11,7 +11,7 @@ Commands inside chat:
     /quit    — exit
 """
 
-import os, sys, time, json, math, argparse
+import os, sys, time, json, math, argparse, gzip
 from pathlib import Path
 from threading import Thread
 
@@ -32,6 +32,21 @@ ROOT        = Path(__file__).parent
 ADAPTER_DIR = ROOT / "RhizomeML-finetuned"
 TEST_FILE   = ROOT / "data_finetune" / "dataset_test.jsonl"
 
+# All turn/stop markers — used for token-level stopping in model.generate()
+STOP_MARKERS = ["<|user|>", "<|assistant|>", "<|im_start|>", "<|endoftext|>"]
+# Only unregistered tokens that survive skip_special_tokens and can leak as plain text
+TEXT_MARKERS = ["<|user|>", "<|assistant|>"]
+
+
+def resolve_model_path(path: Path) -> Path:
+    """If path has no adapter_config.json, find the latest checkpoint inside it."""
+    if (path / "adapter_config.json").exists():
+        return path
+    checkpoints = sorted(path.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
+    if checkpoints:
+        return checkpoints[-1]
+    return path
+
 console = Console()
 
 # ── args ───────────────────────────────────────────────────────────────────────
@@ -48,7 +63,7 @@ def parse_args():
 
 # ── model ──────────────────────────────────────────────────────────────────────
 def load_model(args):
-    adapter_path = Path(args.model)
+    adapter_path = resolve_model_path(Path(args.model))
     is_peft = (adapter_path / "adapter_config.json").exists()
 
     if is_peft and not args.base:
@@ -82,6 +97,25 @@ def load_model(args):
     model.eval()
     return model, tokenizer, base_name, use_quant
 
+
+def get_stop_ids(tokenizer) -> list:
+    """EOS token plus any turn markers that happen to be single tokens."""
+    stop = [tokenizer.eos_token_id]
+    for marker in STOP_MARKERS:
+        ids = tokenizer.encode(marker, add_special_tokens=False)
+        if len(ids) == 1 and ids[0] not in stop:
+            stop.append(ids[0])
+    return stop
+
+
+def clean_reply(text: str) -> str:
+    """Truncate at the first leaked plain-text role marker (post-generation safety net)."""
+    for marker in TEXT_MARKERS:
+        idx = text.find(marker)
+        if idx != -1:
+            text = text[:idx]
+    return text.strip()
+
 # ── prompt ─────────────────────────────────────────────────────────────────────
 def build_prompt(tokenizer, history, system=None):
     messages = ([{"role": "system", "content": system}] if system else []) + history
@@ -96,8 +130,8 @@ def build_prompt(tokenizer, history, system=None):
 
 # ── streaming generation ───────────────────────────────────────────────────────
 def stream_reply(model, tokenizer, prompt, args):
-    device  = next(model.parameters()).device
-    inputs  = tokenizer(prompt, return_tensors="pt").to(device)
+    device   = next(model.parameters()).device
+    inputs   = tokenizer(prompt, return_tensors="pt").to(device)
     streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
     Thread(target=model.generate, kwargs=dict(
@@ -109,20 +143,40 @@ def stream_reply(model, tokenizer, prompt, args):
         repetition_penalty=args.rep_pen,
         do_sample=True,
         pad_token_id=tokenizer.eos_token_id,
+        eos_token_id=get_stop_ids(tokenizer),
     ), daemon=True).start()
 
-    t0, n_tok, buf = time.time(), 0, ""
+    t0, n_tok = time.time(), 0
+    buf, yielded_up_to = "", 0
+
     for chunk in streamer:
         buf   += chunk
         n_tok += 1
+
+        # Check whether a plain-text role marker has leaked into the buffer
+        leak_idx = None
+        for marker in TEXT_MARKERS:
+            i = buf.find(marker, max(0, yielded_up_to - len(marker)))
+            if i != -1 and (leak_idx is None or i < leak_idx):
+                leak_idx = i
+
+        if leak_idx is not None:
+            # Yield only the clean part of the buffer we haven't yielded yet
+            to_yield = buf[yielded_up_to:leak_idx]
+            if to_yield:
+                yield to_yield
+            break
+
         yield chunk
+        yielded_up_to = len(buf)
+
     elapsed = time.time() - t0
     yield f"\n\n[dim]({n_tok} tok · {elapsed:.1f}s · {n_tok/max(elapsed,0.01):.1f} tok/s)[/dim]"
-    return buf
 
 # ── eval ───────────────────────────────────────────────────────────────────────
 def run_eval(model, tokenizer, args, n_samples=60):
-    if not TEST_FILE.exists():
+    test_file = TEST_FILE if TEST_FILE.exists() else Path(str(TEST_FILE) + ".gz")
+    if not test_file.exists():
         console.print("[yellow]Test file not found.[/]")
         return
 
@@ -130,7 +184,9 @@ def run_eval(model, tokenizer, args, n_samples=60):
     import random
     random.seed(42)
 
-    records = [json.loads(l) for l in TEST_FILE.read_text().splitlines() if l.strip()]
+    opener = gzip.open if test_file.suffix == ".gz" else open
+    with opener(test_file, "rt", encoding="utf-8") as f:
+        records = [json.loads(l) for l in f if l.strip()]
     samples = random.sample(records, min(n_samples, len(records)))
 
     device = next(model.parameters()).device
@@ -187,8 +243,10 @@ def run_eval(model, tokenizer, args, n_samples=60):
                 **ids, max_new_tokens=200, temperature=0.7,
                 top_p=0.9, do_sample=True,
                 pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=get_stop_ids(tokenizer),
             )
-        reply = tokenizer.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+        reply = tokenizer.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
+        reply = clean_reply(reply)
         console.print(Panel(reply, border_style="magenta", padding=(0, 1)))
 
     console.print(Rule())
@@ -276,9 +334,9 @@ def main():
             chunks.append(chunk)
         console.print()
 
-        # strip stats line, store clean reply in history
-        full = "".join(chunks)
-        clean = full.rsplit("\n\n", 1)[0].strip()
+        # strip stats line then any leaked role markers, store in history
+        full  = "".join(chunks)
+        clean = clean_reply(full.rsplit("\n\n", 1)[0])
         if clean:
             history.append({"role": "assistant", "content": clean})
 
