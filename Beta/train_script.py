@@ -1686,10 +1686,26 @@ class RhizomeTrainer:
             logger.warning("⚠️ No theme distribution found in metadata. Theme tracking disabled.")
             use_theme_weighting = False
         
+        # Unregistered role markers that leak into model output if left in training text.
+        # Replace with proper ChatML equivalents so the model learns the right format.
+        _ROLE_REPLACEMENTS = [
+            ("<|user|>",      "<|im_start|>user\n"),
+            ("<|assistant|>", "<|im_end|>\n<|im_start|>assistant\n"),
+        ]
+
+        def _clean_training_text(text: str) -> str:
+            for bad, good in _ROLE_REPLACEMENTS:
+                text = text.replace(bad, good)
+            return text
+
         def tokenize_function(examples):
             """Tokenizes a batch of text examples."""
             text_data = examples.get("text") or examples.get("content") or examples.get("prompt", [])
-            
+            if isinstance(text_data, list):
+                text_data = [_clean_training_text(t) if isinstance(t, str) else t for t in text_data]
+            elif isinstance(text_data, str):
+                text_data = _clean_training_text(text_data)
+
             return self.tokenizer(
                 text_data,
                 truncation=True,
@@ -1999,7 +2015,7 @@ class RhizomeTrainer:
                     except Exception as e:
                         logger.warning(f"Failed to load theme tracker state: {e}")
 
-                trainer.train(resume_from_checkpoint=True)
+                trainer.train(resume_from_checkpoint=last_checkpoint_path)
 
                 # Diagnostic output after resume
                 if trainer.state.global_step > 0:
