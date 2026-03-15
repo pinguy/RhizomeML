@@ -1574,8 +1574,8 @@ class RhizomeTrainer:
 
             # Configure LoRA adapters
             lora_config = LoraConfig(
-                r=64,
-                lora_alpha=128,
+                r=16,
+                lora_alpha=32,
                 target_modules=lora_target_modules,
                 lora_dropout=0.05,
                 bias="lora_only", # Bias type for Lora. Can be 'none', 'all' or 'lora_only'
