@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 from collections import defaultdict, Counter
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing as mp
-import faiss
 
 # --- NLTK Setup ---
 NLTK_AVAILABLE = False
@@ -221,14 +220,14 @@ class Config:
     
     # --- Q&A Pair Generation ---
     context_window_size: int = 3
-    max_pairs_per_source: int = 10000
+    max_pairs_per_source: int = 5000
     
     # --- Q&A Pair Quality Filtering ---
     dedup_similarity_threshold: float = 0.95
     min_semantic_similarity: float = 0.1
     max_semantic_similarity: float = 0.95
     min_length_ratio: float = 0.1
-    max_length_ratio: float = 100.0
+    max_length_ratio: float = 10.0
     qa_quality_score_threshold: float = 0.46
     
     # --- Splits ---
@@ -1040,53 +1039,33 @@ class QABuilder:
         self.model = model
     
     def _diverse_prompts(self, chunk_text: str, metadata: Dict) -> List[str]:
-        # Extract key terms (proper nouns and multi-word capitalized phrases)
-        key_terms = list(set(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b', chunk_text)))
-        # Also grab lowercase domain terms (words 6+ chars appearing 2+ times)
-        word_counts = Counter(re.findall(r'\b[a-z]{6,}\b', chunk_text.lower()))
-        domain_terms = [w for w, c in word_counts.most_common(10) if c >= 2
-                        and w not in {'should', 'through', 'within', 'without', 'system',
-                                      'between', 'however', 'further', 'therefore', 'because',
-                                      'whether', 'another', 'example', 'following', 'different'}]
-
-        theme = metadata.get('primary_theme', '')
-        if not theme or theme == 'general_topic':
-            themes = metadata.get('semantic_themes', [])
-            theme = themes[0] if themes else 'this topic'
-        source = metadata.get('filename', metadata.get('source_file', 'this text'))
-        # Strip extension for cleaner question text
-        source = re.sub(r'\.(pdf|txt|epub)$', '', str(source), flags=re.I)
-
-        # ── Concept-level templates (no raw chunk text embedded) ──────────────
+        paras = re.split(r'\n\n+', chunk_text)
+        first = (paras[0][:500] if paras else chunk_text[:500]).strip()
+        key_terms = list(set(re.findall(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\b', chunk_text)))
+        
+        theme = metadata.get('primary_theme', 'general_topic')
+        if theme == 'general_topic' and metadata.get('semantic_themes'):
+            theme = metadata['semantic_themes'][0]
+        
         templates = [
-            f"Explain the concept of {theme} as described in this passage.",
-            f"What is the core argument being made about {theme}?",
-            f"How would you apply the ideas in this passage to a real-world scenario?",
-            f"What are the main principles outlined here regarding {theme}?",
-            f"What does this passage reveal about {theme} that is not widely known?",
-            f"Critically evaluate the claims made in this section about {theme}.",
-            f"Summarise the key takeaways from this passage in your own words.",
-            f"What assumptions underlie the argument presented here?",
-            f"What are the practical implications of the ideas discussed here?",
-            f"Compare the approach described here to other ways of thinking about {theme}.",
-            "What questions does this passage leave unanswered?",
-            "What evidence or examples does the author use to support their point?",
+            f"Summarize the key ideas in: '{first}'.",
+            f"What is the main topic in this text: '{first}'?",
+            "What key arguments are made in this text?",
+            "What questions does this passage raise?",
+            f"Describe the key steps in: '{first}'.",
+            f"What are the implications discussed regarding {theme}?",
+            f"What examples are provided in: '{first}'?",
+            f"How does this relate to {theme}?",
         ]
-
-        # Term-specific questions (no raw text, term only)
+        
         if key_terms:
-            term = random.choice(key_terms[:8])  # limit to first 8 to stay on-topic
+            term = random.choice(key_terms)
             templates.extend([
-                f"What role does '{term}' play in the context described here?",
-                f"Explain the significance of '{term}' according to this passage.",
+                f"Explain the significance of '{term}' in this passage.",
+                f"What does the text say about '{term}'?"
             ])
-        if domain_terms:
-            dterm = random.choice(domain_terms[:5])
-            templates.extend([
-                f"How is the concept of '{dterm}' used or defined in this passage?",
-            ])
-
-        k = min(5, len(templates))
+        
+        k = min(4, len(templates))
         return random.sample(templates, k=k)
 
 # ============================================================================
@@ -1272,61 +1251,40 @@ class OptimizedDataProcessor:
         return final_entries
 
     def _efficient_deduplication(self, embeddings: np.ndarray, threshold: float = None) -> List[int]:
-        """Bulk FAISS deduplication using union-find — no Python per-item loop.
-
-        1. Build the full index once from all embeddings.
-        2. Search all vectors in large batches (k nearest neighbours).
-        3. Union-find groups near-duplicates; keep lowest-index representative.
-
-        Embeddings must be L2-normalised so inner-product == cosine similarity.
-        """
+        """Efficient semantic deduplication using vectorized operations"""
         if embeddings.size == 0:
             return list(range(len(embeddings)))
-
+        
         threshold = threshold or self.config.dedup_similarity_threshold
-        n, dim = embeddings.shape
-        vecs = embeddings.astype(np.float32)
-
-        logger.info(f"  Building FAISS index for {n} vectors...")
-        index = faiss.IndexFlatIP(dim)
-        index.add(vecs)
-
-        # k=5 catches near-duplicate chains; increase if data is very repetitive
-        k = min(5, n)
-        batch_size = 8192
-
-        # Union-find
-        parent = list(range(n))
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        logger.info(f"  Searching for near-duplicates in batches of {batch_size}...")
-        for start in tqdm(range(0, n, batch_size), desc="Dedup Batches"):
-            end = min(start + batch_size, n)
-            sims, idxs = index.search(vecs[start:end], k=k)
-            for j in range(end - start):
-                i = start + j
-                for ki in range(k):
-                    neighbour = int(idxs[j, ki])
-                    if neighbour != i and sims[j, ki] >= threshold:
-                        # Merge the two groups
-                        pi, pn = find(i), find(neighbour)
-                        if pi != pn:
-                            parent[pn] = pi
-
-        # Keep the lowest-index item from each group
-        seen_roots: Set[int] = set()
         keep_indices = []
-        for i in range(n):
-            root = find(i)
-            if root not in seen_roots:
-                seen_roots.add(root)
-                keep_indices.append(i)
-
+        chunk_size = 1000
+        
+        for i in range(0, len(embeddings), chunk_size):
+            end_idx = min(i + chunk_size, len(embeddings))
+            current_chunk = embeddings[i:end_idx]
+            
+            if keep_indices:
+                kept_embeddings = embeddings[keep_indices]
+                similarities = cosine_similarity(current_chunk, kept_embeddings)
+                max_similarities = np.max(similarities, axis=1)
+                
+                chunk_keep = [j for j, sim in enumerate(max_similarities) if sim < threshold]
+                keep_indices.extend([i + j for j in chunk_keep])
+            else:
+                if len(current_chunk) > 1:
+                    internal_similarities = cosine_similarity(current_chunk)
+                    np.fill_diagonal(internal_similarities, 0)
+                    to_remove_in_chunk = set()
+                    for r in range(current_chunk.shape[0]):
+                        for c in range(r + 1, current_chunk.shape[0]):
+                            if internal_similarities[r, c] >= threshold:
+                                to_remove_in_chunk.add(c)
+                    for j in range(current_chunk.shape[0]):
+                        if j not in to_remove_in_chunk:
+                            keep_indices.append(i + j)
+                else:
+                    keep_indices.extend(list(range(i, end_idx)))
+        
         return keep_indices
 
     # ========================================================================
@@ -1477,17 +1435,15 @@ class OptimizedDataProcessor:
             by_source[entry['metadata'].get('filename', 'unknown_pdf')].append(entry)
         
         for source, entries in tqdm(by_source.items(), desc="Processing PDF sources"):
-            max_entries = min(len(entries), self.config.max_pairs_per_source)
+            max_entries = min(len(entries), self.config.max_pairs_per_source // 3)
             selected_entries = random.sample(entries, max_entries) if len(entries) > max_entries else entries
             
             batch_questions, batch_answers, batch_metadata = [], [], []
             
             for entry in selected_entries:
-                # Lowered from 0.4 → 0.2 for PDFs: OCR artefacts drag composite scores
-                # down even on good content. The qa_quality_score_threshold (0.46) acts
-                # as the real quality gate on the generated pairs.
+                # Filter by chunk quality
                 chunk_quality = entry.get('quality_scores', {}).get('composite_quality', 0)
-                if chunk_quality < 0.2:
+                if chunk_quality < 0.4:
                     continue
                 
                 chunk_text, metadata = entry.get('cleaned_text'), entry.get('metadata', {})
@@ -1644,7 +1600,7 @@ def parse_args() -> Config:
     
     # --- Performance ---
     p.add_argument('--workers', type=int, default=None, help='Max parallel workers (default: auto)')
-    p.add_argument('--batch-size', type=int, default=1024, help='Batch size for embeddings')
+    p.add_argument('--batch-size', type=int, default=64, help='Batch size for embeddings')
     p.add_argument('--embedding-cache-size', type=int, default=50000, help='Size of LRU cache for embeddings')
     
     # --- Embeddings ---
@@ -1753,22 +1709,13 @@ def main(cfg: Config):
     # ========================================================================
     
     logger.info("\n🔧 PROCESSING MEMORY ENTRIES...")
-
-    # Separate BEFORE deduplication so PDFs don't compete with conversations
-    # (book chunks cluster at high cosine similarity within-book, which wipes them out
-    # in a global dedup — running dedup per-source avoids this).
-    raw_convo = [e for e in memory_entries_raw if e.get('metadata', {}).get('source') == 'conversation']
-    raw_pdf   = [e for e in memory_entries_raw if e.get('metadata', {}).get('source') == 'pdf']
-
-    logger.info(f"Raw entries — conversations: {len(raw_convo)}  PDFs: {len(raw_pdf)}")
-
-    logger.info("Deduplicating conversation entries...")
-    convo_entries = processor.deduplicate_and_clean_entries(raw_convo)
-
-    logger.info("Deduplicating PDF entries (per-source)...")
-    pdf_entries = processor.deduplicate_and_clean_entries(raw_pdf)
-
-    logger.info(f"✓ Memory data distribution after dedup:")
+    cleaned_memory_entries = processor.deduplicate_and_clean_entries(memory_entries_raw)
+    
+    # Separate by source type
+    convo_entries = [e for e in cleaned_memory_entries if e.get('metadata', {}).get('source') == 'conversation']
+    pdf_entries = [e for e in cleaned_memory_entries if e.get('metadata', {}).get('source') == 'pdf']
+    
+    logger.info(f"✓ Memory data distribution:")
     logger.info(f"  - Conversation entries: {len(convo_entries)}")
     logger.info(f"  - PDF entries: {len(pdf_entries)}")
     
