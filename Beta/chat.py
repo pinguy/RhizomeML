@@ -26,6 +26,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
+from rich.text import Text
 from rich import box
 
 ROOT        = Path(__file__).parent
@@ -240,14 +241,14 @@ def run_eval(model, tokenizer, args, n_samples=60):
         ids    = tokenizer(prompt, return_tensors="pt").to(device)
         with torch.no_grad():
             out = model.generate(
-                **ids, max_new_tokens=200, temperature=0.7,
+                **ids, max_new_tokens=512, temperature=0.7,
                 top_p=0.9, do_sample=True,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=get_stop_ids(tokenizer),
             )
         reply = tokenizer.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
         reply = clean_reply(reply)
-        console.print(Panel(reply, border_style="magenta", padding=(0, 1)))
+        console.print(Panel(Text(reply, overflow="fold"), border_style="magenta", padding=(0, 1)))
 
     console.print(Rule())
 
