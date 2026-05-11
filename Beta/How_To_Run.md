@@ -317,8 +317,9 @@ nvidia-smi
 ### Convert to GGUF
 
 ```bash
-python -m venv venv_gguf
+python3.12 -m venv venv_gguf
 source venv_gguf/bin/activate
+pip install --upgrade pip setuptools wheel
 pip install --use-deprecated=legacy-resolver peft
 
 python convert_to_gguf.py              # Auto 4-bit medium quantization
