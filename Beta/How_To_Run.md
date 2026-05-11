@@ -346,9 +346,12 @@ The venv isolates llama.cpp build dependencies. Once compiled, you can safely de
 # Offload to GPU
 ./llama.cpp/build/bin/llama-server \
   -m ./gguf_models/*.gguf \
-  --n-gpu-layers 999 \
-  --ctx-size 10240 \
-  --batch-size 248 \
+  --n-gpu-layers 40 \
+  --ctx-size 4096 \
+  --batch-size 512 \
+  --flash-attn on \
+  --threads 20 \
+  --threads-batch 20 \
   --port 8081
 ```
 
